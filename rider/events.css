@@ -1,0 +1,26 @@
+.ev-view, .ev-content, .ev-create, .ev-rankings { display:grid; gap:1rem; min-width:0; }
+.ev-view h2, .ev-view h3, .ev-view p { margin:0; }
+.ev-view .ev-status:empty, .ev-rankings > p:empty { display:none; }
+.ev-view .ev-status { color:#813a18; }
+.ev-view .ev-head { border-radius:.6rem; padding:1.2rem; background:#20382a; color:#f2f7ec; }
+.ev-view .ev-head > small { color:#c5e994; font-weight:650; }
+.ev-view .ev-head p { color:#ecf3e3; }
+.ev-view .ev-actions, .ev-view .ev-item { display:flex; flex-wrap:wrap; align-items:center; gap:.6rem .9rem; }
+.ev-view .ev-actions h2 { margin-inline-end:auto; }
+.ev-view .ev-fields { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(12rem,100%),1fr)); gap:.75rem; }
+.ev-view .ev-field { display:grid; gap:.25rem; font-size:.94rem; font-weight:650; }
+.ev-view select, .ev-view input { box-sizing:border-box; max-width:100%; min-width:0; padding:.65rem; border-radius:.4rem; border:1px solid #93a38e; color:#15271a; background:white; font:inherit; }
+.ev-view button { justify-self:start; width:fit-content; min-height:42px; border:1px solid #9cab98; border-radius:.35rem; padding:.47rem .8rem; font:inherit; font-weight:650; color:#213722; background:#f2f6ec; cursor:pointer; }
+.ev-view button:hover:not(:disabled) { background:#dcebc9; }
+.ev-view button:disabled { opacity:.58; cursor:default; }
+.ev-view .ev-item { border-bottom:1px solid #c7d1c1; padding:.7rem 0; justify-content:space-between; }
+.ev-view .ev-item small { display:block; color:#4d6051; }
+.ev-view .ev-fold { border:1px solid #c3cfbc; border-radius:.45rem; padding:.7rem .9rem; }
+.ev-view .ev-fold > summary { font-weight:700; cursor:pointer; }
+.ev-view .ev-fold[open] > summary { margin-block-end:.9rem; }
+.ev-view .ev-fold > .tg { margin-block-end:.8rem; }
+.ev-view .ev-table { overflow-x:auto; margin-block-end:.65rem; }
+.ev-view table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+.ev-view th, .ev-view td { text-align:start; padding:.5rem; border-bottom:1px solid #c3cfbc; white-space:nowrap; }
+.ev-view td button { min-height:32px; padding:.2rem .6rem; max-width:22rem; white-space:normal; overflow-wrap:anywhere; }
+.ev-view summary:focus-visible, .ev-view select:focus-visible { outline:3px solid #d45d15; outline-offset:3px; }

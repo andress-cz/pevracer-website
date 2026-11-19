@@ -1,0 +1,17 @@
+.tg { display: grid; gap: 1rem; min-width: 0; }
+.tg .tg-map { width: 100%; height: clamp(215px,30vw,350px); display: block; border-radius: .6rem; background: #112019; }
+.tg .tg-placing { cursor: crosshair; outline: 3px solid #91ba55; }
+.tg form, .tg-panel { display: grid; gap: 1rem; margin: 0; }
+.tg .tg-panel { border-block: 1px solid #bac9b9; padding-block: 1rem; }
+.tg-fields { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(10rem,100%),1fr)); gap: .8rem; }
+.tg .tg-field { display: flex; flex-direction: column; gap: .3rem; font-size: .92rem; font-weight: 650; }
+.tg input:not([type=file]), .tg select { box-sizing: border-box; width: 100%; background: #fff; color: #14291b; font: inherit; font-weight: 450; padding: .55rem .65rem; border: 1px solid #8d9f8d; border-radius: .35rem; min-height: 44px; }
+.tg-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.tg button { font: inherit; font-weight: 650; border: 1px solid #92a18e; background: #f1f5eb; color: #213621; border-radius: .35rem; padding: .5rem .85rem; cursor: pointer; min-height: 44px; width: fit-content; }
+.tg button:disabled { opacity: .55; cursor: default; }
+.tg button.tg-save, .tg button[aria-pressed=true] { background: #24432b; color: white; }
+.tg-status { color: #375139; overflow-wrap: anywhere; }
+.tg-status:empty { display: none; }
+.tg-summary dl { display: grid; grid-template-columns: auto 1fr; gap: .3rem 1rem; font-variant-numeric: tabular-nums; }
+.tg-summary dt { font-weight: 650; overflow-wrap: anywhere; }
+.tg-summary dd { margin: 0; }

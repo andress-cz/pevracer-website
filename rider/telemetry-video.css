@@ -1,0 +1,11 @@
+.pev-video-layer { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); pointer-events:none; }
+.tel-video-stage > .tel-hud { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; padding:0; margin:-1px; pointer-events:none; }
+.pev-video-controls,.pev-layout,.pev-layout > div,.pev-layout details > div { display:grid; gap:.75rem; }
+.pev-layout { border-block-start:1px solid #bdcbb9; padding-block-start:.85rem; min-width:0; }
+.pev-layout-fields { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(10rem,100%),1fr)); gap:.6rem; }
+.pev-layout-fields .tel-field,.pev-layout-fields input,.pev-layout-fields select { width:100%; min-width:0; }
+.pev-layout-tools { display:flex; align-items:end; flex-wrap:wrap; gap:.5rem; }
+.pev-layout button { min-height:40px; }
+.pev-layout input[type=color] { height:40px; }
+.pev-layout details { border:1px solid #becab6; border-radius:.45rem; padding:.7rem; }
+.pev-layout details[open]>summary { margin-bottom:.75rem; }
