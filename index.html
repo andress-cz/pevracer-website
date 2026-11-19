@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PEV Racer — Ride telemetry and lap timing for Android</title>
+<meta name="description" content="Record GPS and vehicle telemetry, compare laps and share track sessions with PEV Racer for Android. Explore a simulated practice ride.">
+<link rel="icon" href="assets/icon.png"><link rel="stylesheet" href="style.css">
+<script src="assets/practice.js" defer></script><script src="player.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="top"><div class="wrap nav"><a class="brand" href="./" aria-label="PEV Racer home"><img src="assets/icon.png" width="40" height="40" alt="">PEV RACER</a><nav aria-label="Main navigation"><a href="#analysis">App features</a><a href="#support">Support</a></nav></div></header>
+<main id="main">
+<div class="hero"><div class="wrap hero-grid">
+<div class="intro"><p class="kicker"><span></span> Ride telemetry for Android</p><h1>Every lap,<br><em>in detail.</em></h1>
+<p class="lede">Record your route, speed and vehicle telemetry. Compare laps and sectors to see where you gain time on the track.</p>
+<a class="cta" href="#analysis">Explore the app</a><a class="secondary" href="downloads/practice-circuit.vbo" download>Download sample ride</a>
+</div>
+<section class="console" id="practice" aria-labelledby="ride-title">
+<div class="console-head"><div><div class="console-label">Session replay</div><h2 id="ride-title">Practice Circuit</h2></div><span class="sim">Simulated ride</span></div>
+<div class="track"><canvas id="track" role="img" aria-label="GPS trace of the oval practice circuit, colored by speed. The marker follows the selected time."></canvas>
+<div class="scale" aria-hidden="true"><i></i>Slower <b></b> Faster</div></div>
+<div class="console-data"><div><span class="console-label">Speed</span><strong><output id="speed">21.7</output> <small>km/h</small></strong></div><div><span class="console-label">Elapsed</span><strong id="elapsed">0:00</strong></div><div><span class="console-label">Distance</span><strong><output id="distance">0.00</output> <small>km</small></strong></div></div>
+<div class="transport"><button id="play" type="button" aria-label="Play simulated ride"><i aria-hidden="true"></i></button><input aria-label="Ride replay time" type="range" id="seek" min="0" max="450" value="0"><span>3:45</span></div>
+<noscript><p>Enable JavaScript to play the simulated ride, or download the VBO file.</p></noscript>
+</section></div></div>
+<section id="analysis" class="wrap analysis" aria-labelledby="analysis-title">
+<div class="section-copy"><p class="kicker"><span></span> Session analysis</p><h2 id="analysis-title">From the ride<br>to the replay.</h2>
+<ul class="features"><li><h3>Record with the gear you ride.</h3><p>Use phone GPS or connect a supported RaceBox or Dragy logger and Bluetooth vehicle. Available telemetry depends on your hardware.</p></li><li><h3>Find time between the gates.</h3><p>Build a track from your route, set sectors and compare laps. Follow the speed trace on the map or add telemetry gauges to your own video.</p></li><li><h3>Bring the session to your crew.</h3><p>Keep rides on your phone or use an optional account to share tracks, enter events and compare lap times on leaderboards.</p></li></ul></div>
+<figure class="app-preview"><div class="preview-head"><span class="console-label">Inside the app</span><div class="tabs" role="group" aria-label="Select app screenshot"><button data-view="map" aria-pressed="true">Map</button><button data-view="stats" aria-pressed="false">Stats</button></div></div><img id="app-shot" width="1080" height="2400" src="assets/ride-map.png" alt="PEV Racer session map with a speed-colored route, playback controls and telemetry chart." loading="lazy"></figure>
+</section>
+<section id="support" class="support"><div class="wrap help-grid"><div><p class="kicker"><span></span> Rider support</p><h2>Need a hand?</h2><p>Get help with a device, an account, or a shared ride.</p><a class="email" href="mailto:support@pevracer.com">support@pevracer.com</a></div>
+<div class="help-links"><a href="privacy/">Privacy policy</a><a href="delete-account/">Request account deletion</a><a href="downloads/location-recording.mp4">Watch a GPS recording demo <small>MP4</small></a></div></div></section>
+</main>
+<footer class="wrap foot"><a class="brand" href="./"><img src="assets/icon.png" width="32" height="32" alt="">PEV RACER</a><span>Ride telemetry for Android</span></footer>
+</body></html>
