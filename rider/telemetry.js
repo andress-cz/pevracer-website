@@ -1,3 +1,4 @@
+import {createTelemetryChart} from './telemetry-chart.js';
 import {coordinate, decodeRecording, elapsedMs, exportRecording, gpsDistance, speed} from './telemetry-codec.js';
 import {mountVideo} from './telemetry-video.js';
 import {mountTiming} from './timing.js';
@@ -88,71 +89,6 @@ function nearest(times,time,lo=0,hi=times.length-1) {
   }
   return lo;
 }
-function rangePoints(first,last,maxCount) {
-  const step = Math.max(1, Math.ceil((last-first+1)/maxCount));
-  const out = [];
-  for (let i=first; i<last; i+=step) out.push(i);
-  out.push(last);
-  return out;
-}
-function panel(label,width,height) {
-  const box = el('div',null,'tel-plot');
-  box.style.aspectRatio = String(width) + '/' + height;
-  const canvas = el('canvas');
-  canvas.width=width; canvas.height=height;
-  canvas.setAttribute('role','img'); canvas.setAttribute('aria-label',label);
-  const ctx=canvas.getContext('2d');
-  const cursor=el('span',null,'tel-cursor');
-  cursor.setAttribute('aria-hidden','true');
-  box.append(canvas,cursor);
-  return {box,canvas,ctx,cursor,width,height};
-}
-function background(p) {
-  const {ctx,width,height}=p;
-  ctx.fillStyle='#13231c'; ctx.fillRect(0,0,width,height);
-  ctx.strokeStyle='#30453a'; ctx.lineWidth=1; ctx.beginPath();
-  for(let x=0;x<width;x+=50) { ctx.moveTo(x,0); ctx.lineTo(x,height); }
-  for(let y=0;y<height;y+=50) { ctx.moveTo(0,y); ctx.lineTo(width,y); }
-  ctx.stroke();
-}
-function cursor(p,x,y) {
-  p.cursor.hidden=x==null;
-  if (x==null) return;
-  p.cursor.style.left=(x/p.width*100)+'%';
-  if (y != null) p.cursor.style.top=(y/p.height*100)+'%';
-}
-function route(data,summary,p) {
-  background(p);
-  if (!summary.points) {
-    p.box.replaceChildren(el('p','GPS coordinates were unavailable for this recording.'));
-    return () => {};
-  }
-  const {centerLon,west,east,north,south}=summary;
-  const cos=Math.max(.0001,Math.cos((north+south)*Math.PI/360));
-  const scale=Math.min((p.width-56)/Math.max(.00001,(east-west)*cos),(p.height-56)/Math.max(.00001,north-south));
-  function xy(i) {
-    const point=coordinate(data,i);
-    if (!point) return null;
-    const lon=centerLon+((point[1]-centerLon+540)%360)-180;
-    return [p.width/2+(lon-(west+east)/2)*cos*scale,p.height/2+((north+south)/2-point[0])*scale];
-  }
-  p.ctx.lineWidth=3;
-  let last=null;
-  for (const i of rangePoints(0,data.count-1,3500)) {
-    const pos=xy(i);
-    if(pos && last) {
-      const v=speed(data,i);
-      const ratio=v==null || summary.peak<=0 ? 0 : Math.min(1,Math.max(0,v/summary.peak));
-      p.ctx.strokeStyle='hsl('+String(163-ratio*93)+' 72% 66%)';
-      p.ctx.beginPath(); p.ctx.moveTo(...last); p.ctx.lineTo(...pos); p.ctx.stroke();
-    }
-    last=pos;
-  }
-  return i => {
-    const point=xy(i);
-    cursor(p,point?.[0],point?.[1]);
-  };
-}
 function lapName(lap) {
   if (lap.outLap) return 'Out lap';
   return 'Lap '+lap.lapNumber+(lap.direction?' · '+lap.direction:'')+(lap.incomplete?' (incomplete)':'');
@@ -196,10 +132,9 @@ function render(container,data,blob,session,name,onCreateTrack,loadComparisons,l
       }
     }
   }
-  const map=panel('GPS route with current sample position',720,300);
-  const locate=route(data,summary,map);
-  const line=panel('Selected telemetry over the ride',720,210);
-  line.cursor.className='tel-line-cursor';
+  const map=el('div',null,'tel-route-map');
+  map.setAttribute('role','region');map.setAttribute('aria-label','Ride route on the satellite map');
+  let locate=()=>{};
   const usableLaps=(rows,count)=>(Array.isArray(rows)?rows:[]).filter(l=>!l.hidden &&
     Number.isInteger(l.startSampleIndex) && l.startSampleIndex>=0 && l.startSampleIndex<count &&
     (l.endSampleIndex==null || l.endSampleIndex>=l.startSampleIndex));
@@ -210,9 +145,7 @@ function render(container,data,blob,session,name,onCreateTrack,loadComparisons,l
   const lap=choose('View',[['','Whole session'],...keyOptions]);
   const compare=choose('Compare with',[['','No comparison'],...keyOptions]);
   compare.control.hidden=true;
-  const channel=choose('Telemetry',metrics.map(([key,label,unit])=>[key,label+' ('+unit+')']));
   const controls=el('div',null,'tel-controls');
-  controls.append(channel.control);
   if(lapRows.length) controls.append(lap.control,compare.control);
   if(loadComparisons && lapRows.length) {
     const shared=el('div',null,'tel-controls');
@@ -258,7 +191,6 @@ function render(container,data,blob,session,name,onCreateTrack,loadComparisons,l
     }
     shared.append(add,note);controls.append(shared);
   }
-  const caption=el('p',null,'tel-caption');
   const compareReadout=el('p',null,'tel-caption');
   const play=btn('Play',togglePlay);
   const seek=el('input');
@@ -267,57 +199,24 @@ function render(container,data,blob,session,name,onCreateTrack,loadComparisons,l
   const readout=el('output');
   const scrub=el('div',null,'tel-scrub'); scrub.append(play,seek,readout);
   let selectedIndex=0, first=0, end=last, frame=0, playing=false, started=0, startTime=0;
-  let activeMetric='speed', unit='km/h', compareRange=null, xAxis='time';
-  const tick=el('div',null,'tel-readout');
+  let compareRange=null, xAxis='time';
+  const chart=createTelemetryChart({metrics,metricValue,onSeek:f=>{
+    stop();
+    const axis=xAxis==='distance'?dist:times;
+    setSample(nearest(axis,axis[first]+f*(axis[end]-axis[first]),first,end));
+  }});
   const setSample=(i)=>{
     selectedIndex=Math.max(first,Math.min(end,i));
     seek.value=String(selectedIndex);
     readout.textContent=clock(times[selectedIndex]-times[first],true);
-    const v=metricValue(data,selectedIndex,activeMetric);
-    tick.textContent=(v==null?'—':v.toFixed(1))+' '+unit+'  ·  '+(dist[selectedIndex]/1000).toFixed(2)+' km';
     locate(selectedIndex);
-    const pos=fraction(selectedIndex,first,end);
-    cursor(line,20+pos*(line.width-40));
+    chart.setSample(selectedIndex);
     seek.setAttribute('aria-valuetext',readout.textContent);
   };
-  function fraction(i,from,to,seriesSummary=summary) {
-    const axis=xAxis==='distance'?seriesSummary.dist:seriesSummary.times;
-    const span=axis[to]-axis[from];
-    return span>0?(axis[i]-axis[from])/span:0;
-  }
   function lapRange(value,rows=lapRows,count=data.count) {
     if(value==='') return [0,count-1];
     const l=rows[Number(value)];
     return [l.startSampleIndex,Math.min(count-1,l.endSampleIndex??count-1)];
-  }
-  function drawChart() {
-    background(line);
-    const ranges=[[first,end],...(compareRange?[compareRange]:[])];
-    const series=ranges.map(([a,b],n)=>{
-      const source=n?compareSource():{data,summary};
-      return rangePoints(a,b,2400).map(i=>[fraction(i,a,b,source.summary),metricValue(source.data,i,activeMetric)]);
-    });
-    let low=Infinity,high=-Infinity;
-    for(const points of series) for(const [,v] of points) if(v!=null) { low=Math.min(low,v); high=Math.max(high,v); }
-    const missing=!Number.isFinite(low);
-    for(let n=0;n<series.length;n++) {
-      const ctx=line.ctx;
-      ctx.strokeStyle=n?'#ffb96c':'#bbf344'; ctx.lineWidth=3;
-      ctx.beginPath();
-      let pen=false;
-      for(const [f,v] of series[n]) {
-        if(v==null) {pen=false; continue;}
-        const x=20+f*(line.width-40), y=high===low?line.height/2:line.height-36-(v-low)/(high-low)*(line.height-62);
-        if(!pen) ctx.moveTo(x,y); else ctx.lineTo(x,y);
-        pen=true;
-      }
-      ctx.stroke();
-    }
-    line.ctx.fillStyle='#d9e7d5'; line.ctx.font='16px sans-serif';
-    if(!missing) line.ctx.fillText(high.toFixed(1)+' '+unit,10,18);
-    caption.textContent=missing?'This recording has no samples for the selected channel.':
-      (compareRange?'Green: '+lapName(lapRows[+lap.select.value])+' · Orange: '+lapName(compareSource().laps[+compare.select.value])+' · ':'')+
-      (xAxis==='distance'?'Distance through each lap':'Elapsed time')+' · '+low.toFixed(1)+' to '+high.toFixed(1)+' '+unit;
   }
   function chooseScope() {
     stop();
@@ -337,7 +236,10 @@ function render(container,data,blob,session,name,onCreateTrack,loadComparisons,l
         sectorTimes(a).map((s,i)=>' · S'+(i+1)+' '+delta(s,bSectors[i])).join('');
     }
     seek.min=String(first);seek.max=String(end);
-    drawChart();setSample(first);
+    const attribute=xAxis==='distance'?'dist':'times';
+    const plots=[{data,axis:summary[attribute],first,last:end,name:lap.select.value===''?'Whole session':lapName(lapRows[+lap.select.value])}];
+    if(compareRange)plots.push({data:source.data,axis:source.summary[attribute],first:compareRange[0],last:compareRange[1],name:lapName(source.laps[+compare.select.value])});
+    chart.setScope(plots,xAxis);setSample(first);
   }
   function stop() {
     playing=false; cancelAnimationFrame(frame);play.textContent='Play';
@@ -355,18 +257,7 @@ function render(container,data,blob,session,name,onCreateTrack,loadComparisons,l
     play.textContent='Pause';frame=requestAnimationFrame(loop);
   }
   lap.select.onchange=compare.select.onchange=chooseScope;
-  channel.select.onchange=()=>{
-    activeMetric=channel.select.value;unit=metrics.find(m=>m[0]===activeMetric)[2];
-    drawChart();setSample(selectedIndex);
-  };
   seek.oninput=()=>{stop();setSample(Number(seek.value));};
-  line.box.onclick=e=>{
-    stop();
-    const rect=line.box.getBoundingClientRect();
-    const f=Math.max(0,Math.min(1,((e.clientX-rect.left)/rect.width*line.width-20)/(line.width-40)));
-    const axis=xAxis==='distance'?dist:times;
-    setSample(nearest(axis,axis[first]+f*(axis[end]-axis[first]),first,end));
-  };
   const exports=el('div',null,'tel-actions');
   const formats=[['csv','PEV Racer CSV'],['racebox','RaceBox CSV']];
   if(summary.points)formats.push(['vbo','VBO']);
@@ -387,9 +278,19 @@ function render(container,data,blob,session,name,onCreateTrack,loadComparisons,l
     }
     onCreateTrack(points,name);
   }));
-  root.append(overview,map.box,controls,line.box,tick,scrub,caption,compareReadout,exports);
+  root.append(overview,map,controls,chart.box,scrub,compareReadout,exports);
   const video=el('div');root.append(video);
   container.replaceChildren(root);
+  if(summary.points){
+    import('./route-map.js').then(({mountReplayMap})=>{
+      if(!root.isConnected)return;
+      locate=mountReplayMap(map,data,summary,session?.track_doc);
+      locate(selectedIndex);
+    }).catch(()=>{if(root.isConnected)map.textContent='The satellite map could not be opened.';});
+  } else {
+    map.className='tel-route-empty';
+    map.textContent='GPS coordinates are unavailable for this recording.';
+  }
   chooseScope();
   if(loadTracks && summary.points>1 && session) {
     const timing=el('div');root.append(timing);
@@ -406,19 +307,26 @@ export function mountTelemetry(container,{session,loadRecording,onCreateTrack,lo
   area.append(el('h3','Telemetry replay'));
   const status=el('p'); status.setAttribute('role','status');
   const view=el('div');
-  const open=btn('Open recording',async()=>{
-    open.disabled=true;status.textContent='Loading recording…';
+  const retry=btn('Retry recording',load);
+  async function load(){
+    retry.hidden=true;status.textContent='Loading recording…';
     try {
       const blob=await loadRecording();
+      if(!area.isConnected)return;
       const data=await decodeRecording(blob);
       if(!area.isConnected)return;
       render(view,data,blob,session,session.title||'ride',onCreateTrack,loadComparisons,loadTracks,onSaveTiming);
-      open.remove();status.textContent='';
-    }catch(error){status.textContent=error.message || 'Unable to open recording.';open.disabled=false;}
-  });
-  if(session?.sample_path && typeof loadRecording==='function') area.append(open,status,view);
-  else area.append(el('p','No recording file is available for this session.'));
+      status.textContent='';
+    }catch(error){
+      status.textContent=error.message || 'Unable to open recording.';
+      retry.hidden=false;
+    }
+  }
   container.replaceChildren(area);
+  if(session?.sample_path && typeof loadRecording==='function'){
+    area.append(status,retry,view);
+    load();
+  }else area.append(el('p','No recording file is available for this session.'));
 }
 export function mountLocalAnalysis(container,{onCreateTrack,onSaveSession}={}) {
   const area=el('section',null,'tel-module');

@@ -4,8 +4,8 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>PEV Racer — Ride telemetry and lap timing for Android</title>
 <meta name="description" content="Record GPS and vehicle telemetry, compare laps and share track sessions with PEV Racer for Android. Explore a simulated practice ride.">
-<link rel="icon" href="assets/icon.png"><link rel="stylesheet" href="style.css">
-<script src="assets/practice.js" defer></script><script src="player.js" defer></script>
+<link rel="icon" href="assets/icon.png"><link rel="stylesheet" href="rider/vendor/leaflet/leaflet.css"><link rel="stylesheet" href="rider/satellite-map.css"><link rel="stylesheet" href="style.css">
+<script type="module" src="player.js"></script>
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
@@ -18,7 +18,7 @@
 </div>
 <section class="console" id="practice" aria-labelledby="ride-title">
 <div class="console-head"><div><div class="console-label">Session replay</div><h2 id="ride-title">Practice Circuit</h2></div><span class="sim">Simulated ride</span></div>
-<div class="track"><canvas id="track" role="img" aria-label="GPS trace of the oval practice circuit, colored by speed. The marker follows the selected time."></canvas>
+<div class="track"><div id="track" role="region" aria-label="Satellite map of the practice circuit"></div>
 <div class="scale" aria-hidden="true"><i></i>Slower <b></b> Faster</div></div>
 <div class="console-data"><div><span class="console-label">Speed</span><strong><output id="speed">21.7</output> <small>km/h</small></strong></div><div><span class="console-label">Elapsed</span><strong id="elapsed">0:00</strong></div><div><span class="console-label">Distance</span><strong><output id="distance">0.00</output> <small>km</small></strong></div></div>
 <div class="transport"><button id="play" type="button" aria-label="Play simulated ride"><i aria-hidden="true"></i></button><input aria-label="Ride replay time" type="range" id="seek" min="0" max="450" value="0"><span>3:45</span></div>
@@ -30,7 +30,7 @@
 <figure class="app-preview"><div class="preview-head"><span class="console-label">Inside the app</span><div class="tabs" role="group" aria-label="Select app screenshot"><button data-view="map" aria-pressed="true">Map</button><button data-view="stats" aria-pressed="false">Stats</button></div></div><img id="app-shot" width="1080" height="2400" src="assets/ride-map.png" alt="PEV Racer session map with a speed-colored route, playback controls and telemetry chart." loading="lazy"></figure>
 </section>
 <section id="support" class="support"><div class="wrap help-grid"><div><p class="kicker"><span></span> Rider support</p><h2>Need a hand?</h2><p>Get help with a device, an account, or a shared ride.</p><a class="email" href="mailto:support@pevracer.com">support@pevracer.com</a></div>
-<div class="help-links"><a href="privacy/">Privacy policy</a><a href="delete-account/">Request account deletion</a><a href="downloads/location-recording.mp4">Watch a GPS recording demo <small>MP4</small></a></div></div></section>
+<div class="help-links"><a href="privacy/">Privacy policy</a><a href="delete-account/">Request account deletion</a></div></div></section>
 </main>
 <footer class="wrap foot"><a class="brand" href="./"><img src="assets/icon.png" width="32" height="32" alt="">PEV RACER</a><span>Ride telemetry for Android</span></footer>
 </body></html>

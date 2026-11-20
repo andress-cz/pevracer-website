@@ -1,0 +1,2 @@
+.tel-route-map { position:relative;isolation:isolate;width:100%;min-width:0;height:clamp(280px,43vh,490px);border-radius:7px;overflow:hidden;background:#172a20; }
+.pev-gate-label { max-width:15rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }

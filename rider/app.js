@@ -131,7 +131,7 @@ async function stats(host,ctx){
 }
 async function detail(host,ctx,type,id){
   const {api,uid}=ctx;
-  const [row]=await api.rows(type+'s',{id:eq(id),select:'*,owner:profiles(username)'});
+  const [row]=await api.rows(type+'s',{id:eq(id),select:type==='session'?'*,owner:profiles(username),linked:tracks(doc)':'*,owner:profiles(username)'});
   if(!row)throw Error('This item is private, unavailable, or has been removed.');
   const mine=row.owner_id===uid;
   host.append(link('All '+type+'s','#'+type+'s'),el('h1',row.title||row.name||date(row.started_at)),el('p',(row.owner?.username||'Rider')+' · '+row.visibility+(row.started_at?' · '+date(row.started_at):'')));
@@ -152,7 +152,7 @@ async function detail(host,ctx,type,id){
   }else{
     metrics(host,[['Distance',km(row.distance_m)],['Top speed',row.max_speed_kmh==null?'—':row.max_speed_kmh.toFixed(1)+' km/h'],['Laps',row.lap_count],['Best lap',duration(row.best_lap_ms)]]);
     if(row.track_id)host.append(link('Open linked track','#track/'+row.track_id));
-    mountTelemetry(panel(host),{session:row,loadRecording:()=>api.download(row.sample_path),onCreateTrack:makeDraft,
+    mountTelemetry(panel(host),{session:{...row,track_doc:row.linked?.doc},loadRecording:()=>api.download(row.sample_path),onCreateTrack:makeDraft,
       loadTracks:()=>api.all('tracks',{owner_id:eq(uid),select:'id,local_id,name,doc',order:'name.asc,id.asc'}),
       onSaveTiming:mine?async({track,laps,lapDirection,best_lap_ms,lap_count})=>{
         if(row.track_local_id!==track.local_id){
