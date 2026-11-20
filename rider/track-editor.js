@@ -173,7 +173,7 @@ function download(doc) {
   a.click();setTimeout(() => URL.revokeObjectURL(url),1000);
 }
 
-export function mountTrack(container, {doc:initial, onSave} = {}) {
+export function mountTrack(container, {doc:initial, onSave, route=[]} = {}) {
   if (!document.querySelector('link[data-pev-track]')) {
     const css = node('link');css.rel='stylesheet';css.href=new URL('track-editor.css',import.meta.url).href;
     css.dataset.pevTrack='';document.head.append(css);
@@ -311,7 +311,7 @@ export function mountTrack(container, {doc:initial, onSave} = {}) {
   redrawEditor();
   import('./route-map.js').then(({mountGateMap})=>{
     if(disposed || !map.isConnected)return;
-    mapView=mountGateMap(map,{
+    mapView=mountGateMap(map,{route,
       onPlace: editable ? position=>{
         if(!placing || form.inert)return;
         putGate(doc,selected,{lat:Number(position.lat.toFixed(7)),lon:Number(position.lng.toFixed(7))});

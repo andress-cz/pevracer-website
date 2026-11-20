@@ -79,7 +79,7 @@ async function createTrack(host,ctx){
     submit(f,'Generate gates',async({mode,sectorCount})=>show(trackFromRoute(source.points,{name:source.name,mode,sectorCount:Number(sectorCount)})));
   }
   host.append(box);
-  function show(doc){clean?.();clean=mountTrack(box,{doc,onSave:async saved=>{
+  function show(doc){clean?.();clean=mountTrack(box,{doc,route:source?.points,onSave:async saved=>{
     if(!ctx){const a=document.createElement('a');const url=URL.createObjectURL(new Blob([JSON.stringify(saved,null,2)],{type:'application/json'}));
       a.href=url;a.download=saved.name+'.pevtrack';a.click();setTimeout(()=>URL.revokeObjectURL(url),3000);return;}
     const [row]=await ctx.api.write('tracks','POST',{select:'id'},{owner_id:ctx.uid,local_id:saved.id,name:saved.name,doc:saved,visibility:'private'},'return=representation');

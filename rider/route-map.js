@@ -51,8 +51,17 @@ function drawGates(group,doc,{selected,longitude,onSelect}={}){
   return bounds;
 }
 
-export function mountGateMap(host,{onPlace,onSelect}={}){
+export function mountGateMap(host,{onPlace,onSelect,route=[]}={}){
   const map=createSatelliteMap(host);
+  if(route.length){
+    const center=route[Math.floor(route.length/2)].lon;
+    const points=route.filter(point=>validPoint(point.lat,point.lon))
+      .map(point=>[point.lat,nearLongitude(point.lon,center)]);
+    if(points.length>1){
+      L.polyline(points,{color:'#f1f4ec',weight:8,opacity:.95,interactive:false}).addTo(map);
+      L.polyline(points,{color:'#168bdd',weight:4,opacity:1,interactive:false}).addTo(map);
+    }
+  }
   const gates=L.layerGroup().addTo(map);
   let hasBounds=false;
   if(onPlace)map.on('click',event=>onPlace(event.latlng.wrap()));
