@@ -163,7 +163,7 @@ export function mountTiming(container,{data,session,loadTracks,onSaveTiming}) {
   const el=(tag,text)=>{const n=document.createElement(tag);if(text!=null)n.textContent=text;return n;};
   const button=(text,handler)=>{const b=el('button',text);b.type='button';b.onclick=handler;return b;};
   const box=el('details');box.className='tel-video';
-  box.append(el('summary','Analyze track timing'));
+  box.append(el('summary','Changed track'));
   const controls=el('div'),status=el('p'),result=el('div');status.setAttribute('role','status');
   box.append(controls,status,result);container.replaceChildren(box);
   const start=button('Choose track',async()=>{

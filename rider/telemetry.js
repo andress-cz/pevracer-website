@@ -238,6 +238,8 @@ function render(container,data,blob,session,name,onCreateTrack,loadComparisons,l
     if(compare.control.hidden || (!external && compare.select.value===lap.select.value)) compare.select.value='';
     const source=compareSource();
     compareRange=compare.select.value===''?null:lapRange(compare.select.value,source.laps,source.data.count);
+    locate.setScope?.(first,end,compareRange?source.data:null,compareRange?source.summary:null,
+      compareRange?.[0],compareRange?.[1]);
     xAxis=compareRange && dist[end]>dist[first] && source.summary.dist[compareRange[1]]>source.summary.dist[compareRange[0]]?'distance':'time';
     mapKey.hidden=!compareRange || !summary.points;
     mapKey.replaceChildren();
@@ -301,6 +303,9 @@ function render(container,data,blob,session,name,onCreateTrack,loadComparisons,l
     import('./route-map.js').then(({mountReplayMap})=>{
       if(!root.isConnected)return;
       locate=mountReplayMap(map,data,summary,session?.track_doc);
+      const source=compareSource();
+      locate.setScope(first,end,compareRange?source.data:null,compareRange?source.summary:null,
+        compareRange?.[0],compareRange?.[1]);
       updateRiders(times[selectedIndex]);
     }).catch(()=>{if(root.isConnected)map.textContent='The satellite map could not be opened.';});
   } else {

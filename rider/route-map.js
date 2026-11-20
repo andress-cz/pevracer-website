@@ -72,12 +72,12 @@ export function mountGateMap(host,{onPlace,onSelect}={}){
   };
 }
 
-function routeSegments(data,summary) {
+function routeSegments(data,summary,first=0,last=data.count-1) {
   // Combine adjacent segments of similar speed into a small number of vector
   // layers. Keep segment breaks at missing GPS fixes, even when decimating.
   const buckets=Array.from({length:16},()=>[]);
   const routes=[];
-  const step=Math.max(1,Math.ceil(summary.points/12000));
+  const step=Math.max(1,Math.ceil((last-first+1)/12000));
   let section=null,previous=null,previousBucket=-1,lastFix=null,since=0;
   function add(point,i){
     if(!previous){section=[point];routes.push(section);}
@@ -95,7 +95,7 @@ function routeSegments(data,summary) {
     if(lastFix&&since)add(lastFix.point,lastFix.i);
     section=null;previous=null;previousBucket=-1;lastFix=null;
   }
-  for(let i=0;i<data.count;i++){
+  for(let i=first;i<=last;i++){
     const pos=coordinate(data,i);
     if(!pos){finish();continue;}
     const point=[pos[0],nearLongitude(pos[1],summary.centerLon)];
@@ -109,14 +109,18 @@ function routeSegments(data,summary) {
 export function mountReplayMap(host,data,summary,trackDoc){
   const center=[(summary.south+summary.north)/2,(summary.west+summary.east)/2];
   const map=createSatelliteMap(host,{center,zoom:16});
-  const {routes,buckets}=routeSegments(data,summary);
+  const primaryTrail=L.layerGroup().addTo(map),comparisonTrail=L.layerGroup().addTo(map);
   const style={interactive:false,opacity:1,smoothFactor:.5,lineCap:'round',lineJoin:'round'};
-  L.polyline(routes,{...style,weight:6,color:'#16241f',opacity:.9}).addTo(map);
-  buckets.forEach((lines,index)=>{
-    if(!lines.length)return;
-    const hue=163-index*93/(buckets.length-1);
-    L.polyline(lines,{...style,weight:3.5,color:'hsl('+hue+' 85% 65%)'}).addTo(map);
-  });
+  function drawTrail(group,recording,recordingSummary,first,last,ghost=false){
+    group.clearLayers();
+    const {routes,buckets}=routeSegments(recording,recordingSummary,first,last);
+    L.polyline(routes,{...style,weight:6,color:'#16241f',opacity:.9}).addTo(group);
+    buckets.forEach((lines,index)=>{
+      if(!lines.length)return;
+      const hue=ghost ? 34-index*11 : 163-index*93/(buckets.length-1);
+      L.polyline(lines,{...style,weight:3.5,color:'hsl('+hue+' 85% 65%)'}).addTo(group);
+    });
+  }
   if(trackDoc)drawGates(L.layerGroup().addTo(map),trackDoc,{longitude:summary.centerLon});
   const bounds=L.latLngBounds([summary.south,summary.west],[summary.north,summary.east]);
   map.pevSetHome(bounds,homeOptions);
@@ -130,7 +134,7 @@ export function mountReplayMap(host,data,summary,trackDoc){
     if(!map.hasLayer(marker))marker.addTo(map);
     return pos;
   }
-  return (point,other,follow)=>{
+  const update=(point,other,follow)=>{
     const addingGhost=other && !map.hasLayer(comparison);
     const ghost=place(comparison,other),current=place(primary,point);
     if(addingGhost && current)primary.bringToFront();
@@ -148,4 +152,11 @@ export function mountReplayMap(host,data,summary,trackDoc){
       map.setView(focus,zoom,{animate:false});
     }
   };
+  update.setScope=(first,last,otherData,otherSummary,otherFirst,otherLast)=>{
+    drawTrail(primaryTrail,data,summary,first,last);
+    if(otherData&&otherSummary)drawTrail(comparisonTrail,otherData,otherSummary,otherFirst,otherLast,true);
+    else comparisonTrail.clearLayers();
+  };
+  update.setScope(0,data.count-1);
+  return update;
 }
