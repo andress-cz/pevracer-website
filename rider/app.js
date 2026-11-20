@@ -140,17 +140,32 @@ async function stats(host,ctx){
   const vehicles=[...new Set(sessions.map(s=>s.eucName).filter(Boolean))];
   const vehicle=field(host,'Vehicle','vehicle','select',{choices:[['','All vehicles'],...vehicles.map(v=>[v,v])]});
   const body=el('div');host.append(body);
-  const heat=panel(body,'Rider heatmap','Public ride recordings from all riders. Private and friends-only sessions are excluded. Ride locations are shown at a lower detail level than the original recordings.');
-  const heatStatus=el('p','Load the public ride heatmap to see where riders have recorded sessions.','quiet');
+  const heat=panel(body,'Rider heatmap','Choose whether to map your own rides or sessions that riders have made public. Private and friends-only sessions are never included in the public heatmap. Locations are sampled at a lower detail level than the original recordings.');
+  const heatStatus=el('p','Choose a ride source to load its heatmap.','quiet');
   const heatActions=el('div',null,'actions');
-  const heatButton=button(heatActions,'Load heatmap',async out=>{
-    heatButton.disabled=true;heatStatus.textContent='Finding public ride recordings…';
+  const heatModes=[['mine','My rides'],['public','Public rides']];
+  const modeButtons=new Map();
+  let heatMap=null,heatMapHost=null,heatLoad=0;
+  for(const [mode,label] of heatModes){
+    const choice=el('button',label,'btn');choice.type='button';choice.setAttribute('aria-pressed','false');
+    choice.onclick=()=>loadHeatmap(mode);modeButtons.set(mode,choice);heatActions.append(choice);
+  }
+  heat.append(heatStatus,heatActions);
+  async function loadHeatmap(mode){
+    const request=++heatLoad;
+    for(const [key,choice] of modeButtons){choice.disabled=true;choice.classList.toggle('primary',key===mode);choice.setAttribute('aria-pressed',String(key===mode));}
+    clearHeatmap();
+    heatStatus.textContent='Finding '+(mode==='mine'?'your':'public')+' ride recordings…';
     try{
-      const shared=await ctx.api.all('sessions',{visibility:eq('public'),sample_path:'not.is.null',sample_bytes:'lte.52428800',select:'id,sample_path,sample_bytes'});
-      if(!shared.length){heatStatus.textContent='No public recordings with location data are available yet.';return;}
+      const filters=mode==='mine'
+        ?{owner_id:eq(ctx.uid),is_mine:eq(true)}
+        :{visibility:eq('public')};
+      const recordings=await ctx.api.all('sessions',{...filters,sample_path:'not.is.null',sample_bytes:'lte.52428800',select:'id,sample_path,sample_bytes'});
+      if(request!==heatLoad)return;
+      if(!recordings.length){heatStatus.textContent=mode==='mine'?'No recordings from your rides are available yet.':'No public recordings are available yet.';clearHeatmap();return;}
       const points=[];let done=0,failures=0;
-      for(let start=0;start<shared.length;start+=4){
-        const batch=shared.slice(start,start+4);
+      for(let start=0;start<recordings.length;start+=4){
+        const batch=recordings.slice(start,start+4);
         await Promise.all(batch.map(async session=>{
           try{
             const data=await decodeRecording(await ctx.api.download(session.sample_path));
@@ -158,31 +173,43 @@ async function stats(host,ctx){
           }catch{failures++;}
           done++;
         }));
-        heatStatus.textContent='Reading public rides… '+done+' / '+shared.length;
+        if(request!==heatLoad)return;
+        heatStatus.textContent='Reading '+(mode==='mine'?'your':'public')+' rides… '+done+' / '+recordings.length;
       }
-      if(!points.length){heatStatus.textContent='No usable location samples were found in public recordings.';return;}
-      heatStatus.textContent=points.length.toLocaleString()+' map samples from '+(done-failures)+' public rides'+(failures?' ('+failures+' unavailable or unreadable)':'')+'.';
-      heatActions.hidden=true;
-      const mapHost=el('div',null,'rider-heatmap');heat.append(mapHost);
-      const map=createSatelliteMap(mapHost,{center:points[0],zoom:5});
-      const canvas=L.DomUtil.create('canvas','rider-heatmap-canvas',map.getPanes().overlayPane),ctx2=canvas.getContext('2d');
-      function draw(){
-        if(!mapHost.clientWidth||!mapHost.clientHeight)return;
-        const size=map.getSize(),ratio=window.devicePixelRatio||1,topLeft=map.containerPointToLayerPoint([0,0]);
-        canvas.width=Math.round(size.x*ratio);canvas.height=Math.round(size.y*ratio);
-        canvas.style.width=size.x+'px';canvas.style.height=size.y+'px';L.DomUtil.setPosition(canvas,topLeft);
-        ctx2.setTransform(ratio,0,0,ratio,0,0);ctx2.clearRect(0,0,size.x,size.y);
-        for(const p of points){const pos=map.latLngToLayerPoint(p).subtract(topLeft),radius=18;
-          const g=ctx2.createRadialGradient(pos.x,pos.y,1,pos.x,pos.y,radius);
-          g.addColorStop(0,'rgba(209,44,24,.30)');g.addColorStop(.35,'rgba(255,146,31,.19)');g.addColorStop(1,'rgba(255,215,71,0)');
-          ctx2.fillStyle=g;ctx2.fillRect(pos.x-radius,pos.y-radius,radius*2,radius*2);
-        }
+      if(request!==heatLoad)return;
+      if(!points.length){heatStatus.textContent='No usable location samples were found in these recordings.';clearHeatmap();return;}
+      heatStatus.textContent=points.length.toLocaleString()+' map samples from '+(done-failures)+' '+(mode==='mine'?'of your':'public')+' rides'+(failures?' ('+failures+' unavailable or unreadable)':'')+'.';
+      showHeatmap(points);
+    }catch(error){
+      if(request===heatLoad)heatStatus.textContent='Could not load this heatmap: '+error.message;
+    }finally{
+      if(request===heatLoad)for(const choice of modeButtons.values())choice.disabled=false;
+    }
+  }
+  function clearHeatmap(){
+    heatMap?.remove();heatMap=null;
+    heatMapHost?.replaceChildren();
+  }
+  function showHeatmap(points){
+    clearHeatmap();
+    if(!heatMapHost){heatMapHost=el('div',null,'rider-heatmap');heat.append(heatMapHost);}
+    const map=createSatelliteMap(heatMapHost,{center:points[0],zoom:5});heatMap=map;
+    const canvas=L.DomUtil.create('canvas','rider-heatmap-canvas',map.getPanes().overlayPane),ctx2=canvas.getContext('2d');
+    function draw(){
+      if(!heatMapHost.clientWidth||!heatMapHost.clientHeight)return;
+      const size=map.getSize(),ratio=window.devicePixelRatio||1,topLeft=map.containerPointToLayerPoint([0,0]);
+      canvas.width=Math.round(size.x*ratio);canvas.height=Math.round(size.y*ratio);
+      canvas.style.width=size.x+'px';canvas.style.height=size.y+'px';L.DomUtil.setPosition(canvas,topLeft);
+      ctx2.setTransform(ratio,0,0,ratio,0,0);ctx2.clearRect(0,0,size.x,size.y);
+      for(const p of points){const pos=map.latLngToLayerPoint(p).subtract(topLeft),radius=18;
+        const g=ctx2.createRadialGradient(pos.x,pos.y,1,pos.x,pos.y,radius);
+        g.addColorStop(0,'rgba(209,44,24,.30)');g.addColorStop(.35,'rgba(255,146,31,.19)');g.addColorStop(1,'rgba(255,215,71,0)');
+        ctx2.fillStyle=g;ctx2.fillRect(pos.x-radius,pos.y-radius,radius*2,radius*2);
       }
-      map.on('moveend zoomend resize',draw);draw();
-      const bounds=L.latLngBounds(points);map.fitBounds(bounds,{padding:[24,24],maxZoom:12});
-    }finally{heatButton.disabled=false;}
-  },'primary');
-  heatActions.append(heatButton);heat.append(heatStatus,heatActions);
+    }
+    map.on('moveend zoomend resize',draw);draw();
+    map.fitBounds(L.latLngBounds(points),{padding:[24,24],maxZoom:12});
+  }
   function draw(){
     const since=period.value==='0'?-Infinity:Date.now()-Number(period.value)*86400000;
     const rows=sessions.filter(r=>r.endedAtEpochMs!=null && Date.parse(r.started_at)>=since && (!vehicle.value||vehicle.value===r.eucName));
