@@ -7,6 +7,9 @@ import {mountTrack,emptyTrack,trackFromRoute} from './track-editor.js';
 import {mountTelemetry,mountLocalAnalysis} from './telemetry.js';
 import {mountBackup} from './backup.js';
 import {mountCommunity,mountSharing,mountModeration,rules} from './community.js';
+import {createSatelliteMap,L} from './satellite-map.js';
+import {decodeRecording} from './telemetry-codec.js';
+import {heatmapPoints} from './heatmap-data.js';
 
 const view=document.querySelector('#view'),nav=document.querySelector('#areas'),signout=document.querySelector('#signout');
 const labels={sessions:'Sessions',tracks:'Tracks',event:'Events',leaderboard:'Leaderboards',community:'Community',stats:'Stats',files:'Analyze a file',account:'Account'};
@@ -137,6 +140,49 @@ async function stats(host,ctx){
   const vehicles=[...new Set(sessions.map(s=>s.eucName).filter(Boolean))];
   const vehicle=field(host,'Vehicle','vehicle','select',{choices:[['','All vehicles'],...vehicles.map(v=>[v,v])]});
   const body=el('div');host.append(body);
+  const heat=panel(body,'Rider heatmap','Public ride recordings from all riders. Private and friends-only sessions are excluded. Ride locations are shown at a lower detail level than the original recordings.');
+  const heatStatus=el('p','Load the public ride heatmap to see where riders have recorded sessions.','quiet');
+  const heatActions=el('div',null,'actions');
+  const heatButton=button(heatActions,'Load heatmap',async out=>{
+    heatButton.disabled=true;heatStatus.textContent='Finding public ride recordings…';
+    try{
+      const shared=await ctx.api.all('sessions',{visibility:eq('public'),sample_path:'not.is.null',sample_bytes:'lte.52428800',select:'id,sample_path,sample_bytes'});
+      if(!shared.length){heatStatus.textContent='No public recordings with location data are available yet.';return;}
+      const points=[];let done=0,failures=0;
+      for(let start=0;start<shared.length;start+=4){
+        const batch=shared.slice(start,start+4);
+        await Promise.all(batch.map(async session=>{
+          try{
+            const data=await decodeRecording(await ctx.api.download(session.sample_path));
+            points.push(...heatmapPoints(data));
+          }catch{failures++;}
+          done++;
+        }));
+        heatStatus.textContent='Reading public rides… '+done+' / '+shared.length;
+      }
+      if(!points.length){heatStatus.textContent='No usable location samples were found in public recordings.';return;}
+      heatStatus.textContent=points.length.toLocaleString()+' map samples from '+(done-failures)+' public rides'+(failures?' ('+failures+' unavailable or unreadable)':'')+'.';
+      heatActions.hidden=true;
+      const mapHost=el('div',null,'rider-heatmap');heat.append(mapHost);
+      const map=createSatelliteMap(mapHost,{center:points[0],zoom:5});
+      const canvas=L.DomUtil.create('canvas','rider-heatmap-canvas',map.getPanes().overlayPane),ctx2=canvas.getContext('2d');
+      function draw(){
+        if(!mapHost.clientWidth||!mapHost.clientHeight)return;
+        const size=map.getSize(),ratio=window.devicePixelRatio||1,topLeft=map.containerPointToLayerPoint([0,0]);
+        canvas.width=Math.round(size.x*ratio);canvas.height=Math.round(size.y*ratio);
+        canvas.style.width=size.x+'px';canvas.style.height=size.y+'px';L.DomUtil.setPosition(canvas,topLeft);
+        ctx2.setTransform(ratio,0,0,ratio,0,0);ctx2.clearRect(0,0,size.x,size.y);
+        for(const p of points){const pos=map.latLngToLayerPoint(p).subtract(topLeft),radius=18;
+          const g=ctx2.createRadialGradient(pos.x,pos.y,1,pos.x,pos.y,radius);
+          g.addColorStop(0,'rgba(209,44,24,.30)');g.addColorStop(.35,'rgba(255,146,31,.19)');g.addColorStop(1,'rgba(255,215,71,0)');
+          ctx2.fillStyle=g;ctx2.fillRect(pos.x-radius,pos.y-radius,radius*2,radius*2);
+        }
+      }
+      map.on('moveend zoomend resize',draw);draw();
+      const bounds=L.latLngBounds(points);map.fitBounds(bounds,{padding:[24,24],maxZoom:12});
+    }finally{heatButton.disabled=false;}
+  },'primary');
+  heatActions.append(heatButton);heat.append(heatStatus,heatActions);
   function draw(){
     const since=period.value==='0'?-Infinity:Date.now()-Number(period.value)*86400000;
     const rows=sessions.filter(r=>r.endedAtEpochMs!=null && Date.parse(r.started_at)>=since && (!vehicle.value||vehicle.value===r.eucName));
@@ -146,6 +192,7 @@ async function stats(host,ctx){
     const section=panel(body,'By track');
     if(!groups.size)section.append(el('p','No finished rides match these filters.'));
     for(const [id,g] of groups)section.append(el('p',(trackNames.get(id)||'Unlinked track')+' · '+g.rides+(g.rides===1?' ride · ':' rides · ')+km(g.distance)+(g.best<Infinity?' · Best '+duration(g.best):'')));
+    body.append(heat);
   }
   period.onchange=vehicle.onchange=draw;draw();
 }

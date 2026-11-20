@@ -18,3 +18,5 @@
 .shell .table-wrap{overflow:auto}.shell table{border-collapse:collapse;width:100%}.shell th,.shell td{text-align:left;white-space:nowrap;border-bottom:1px solid var(--line);padding:.6rem}.shell :focus-visible{outline:3px solid #bd5312;outline-offset:3px}
 @media(max-width:700px){.auth-grid{grid-template-columns:1fr;gap:.8rem;padding-block:0}.auth-intro img{display:none}.record{align-items:start}.shell{width:94%}#areas{gap:.25rem}#areas a{padding:.42rem .6rem}.shell .cols{grid-template-columns:1fr}}
 .lap-times{max-width:100%;min-width:0;font-variant-numeric:tabular-nums}.lap-times td.fastest{color:#9c27b0;font-weight:750}.lap-times .lap-gap{color:#ac2228}.lap-times td a{font-weight:600}.record .session-best{display:grid;gap:.15rem;text-align:right;white-space:nowrap}.session-best small{font:600 .8rem/1.3 system-ui;color:var(--mute)}
+.rider-heatmap{height:min(62vh,560px);min-height:300px;border-radius:.55rem;overflow:hidden;background:#1c302d}
+.rider-heatmap-canvas{pointer-events:none}
