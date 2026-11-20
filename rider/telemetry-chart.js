@@ -29,8 +29,8 @@ function lowerBound(array,target,start,end){
 
 // Keep the first, minimum, maximum and last sample in each screen column. This
 // preserves a short spike that a fixed every-Nth-sample plot would drop.
-function trace(series,values,start,end,scale,columns){
-  const {axis,first,last}=series, base=axis[first], span=axis[last]-base;
+function trace(series,values,start,end,scale,columns,totalSpan){
+  const {axis,first,last}=series, base=axis[first], span=totalSpan;
   const left=Math.max(first,lowerBound(axis,base+span*start,first,last)-1);
   const right=Math.min(last,lowerBound(axis,base+span*end,first,last)+1);
   const x=i=>span?(axis[i]-base-span*start)/(span*(end-start))*1000:0;
@@ -85,7 +85,7 @@ export function createTelemetryChart({metrics,metricValue,onSeek}){
   const prev=action('Pan left',()=>pan(-.5)),next=action('Pan right',()=>pan(.5));
   tools.append(minus,plus,reset,prev,next,selection);
   box.append(heading,picker,legend,viewport,axisLabels,tools,help);
-  let sources=[],axisName='time',start=0,end=1,index=0,frame=0,columns=640;
+  let sources=[],axisName='time',start=0,end=1,index=0,frame=0,columns=640,totalSpan=0;
   let legendValues=new Map();
   for(const [key,label,unit] of metrics){
     const wrap=element('label'), input=element('input');input.type='checkbox';input.checked=selected.has(key);
@@ -109,7 +109,7 @@ export function createTelemetryChart({metrics,metricValue,onSeek}){
   }
   function position(){
     const s=sources[0];if(!s)return 0;
-    const span=s.axis[s.last]-s.axis[s.first];return span?(s.axis[index]-s.axis[s.first])/span:0;
+    return totalSpan?(s.axis[index]-s.axis[s.first])/totalSpan:0;
   }
   function mark(){
     const f=position();cursor.hidden=f<start||f>end||!selected.size;
@@ -122,7 +122,7 @@ export function createTelemetryChart({metrics,metricValue,onSeek}){
   }
   function draw(){
     if(!sources.length)return;
-    const s=sources[0], span=s.axis[s.last]-s.axis[s.first];
+    const s=sources[0], span=totalSpan;
     const channels=metrics.filter(([key])=>selected.has(key));
     const byUnit=new Map();
     for(const [key,,unit] of channels){
@@ -140,7 +140,7 @@ export function createTelemetryChart({metrics,metricValue,onSeek}){
       if(!present)continue;
       for(const [j,source] of sources.entries()){
         const {values}=channel(source,key);
-        const line=svg('path',{d:trace(source,values,start,end,scale,columns),fill:'none',stroke:color,'stroke-width':2,'vector-effect':'non-scaling-stroke','stroke-linecap':'round','stroke-linejoin':'round'});
+        const line=svg('path',{d:trace(source,values,start,end,scale,columns,totalSpan),fill:'none',stroke:color,'stroke-width':2,'vector-effect':'non-scaling-stroke','stroke-linecap':'round','stroke-linejoin':'round'});
         if(j)line.setAttribute('stroke-dasharray','5 5');
         lines.append(line);
       }
@@ -197,7 +197,9 @@ export function createTelemetryChart({metrics,metricValue,onSeek}){
   return {
     box,
     setScope(rows,axis){
-      sources=rows.map(s=>({...s,cache:new Map()}));axisName=axis;start=0;end=1;index=rows[0].first;draw();
+      sources=rows.map(s=>({...s,cache:new Map()}));axisName=axis;start=0;end=1;index=rows[0].first;
+      totalSpan=Math.max(...sources.map(source=>source.axis[source.last]-source.axis[source.first]));
+      draw();
     },
     setSample(i){
       index=i;
