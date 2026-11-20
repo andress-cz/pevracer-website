@@ -1,4 +1,4 @@
-import {el,eq,panel,formAt,field,submit,message,button,link,record,date} from './ui.js';
+import {el,eq,panel,formAt,field,submit,message,button,link,record,sessionEquipment,sessionBest,date} from './ui.js';
 
 export const rules='Share rides and tracks you have the right to publish. Do not post threats, harassment, hate, sexual or illegal content, spam, or someone else’s private information. Reports are reviewed by PEV Racer support. Content can be removed and riders can lose sharing access.';
 async function rider(api,login){
@@ -83,7 +83,7 @@ export async function mountCommunity(host,{api,uid,go,id}){
   const filter=field(box,'Show','filter','select',{choices:[['all','All accessible'],['public','Public'],['friends','From riders who added me'],['direct','Direct invitations']]});
   const list=el('div',null,'records');box.append(list);
   const [sessions,tracks,grants]=await Promise.all([
-    api.all('sessions',{owner_id:'neq.'+uid,select:'id,title,started_at,owner_id,visibility,owner:profiles(username)',order:'started_at.desc,id.asc'}),
+    api.all('sessions',{owner_id:'neq.'+uid,select:'id,title,started_at,owner_id,visibility,best_lap_ms,track_local_id,track:tracks(name),meta->>eucName,owner:profiles(username)',order:'started_at.desc,id.asc'}),
     api.all('tracks',{owner_id:'neq.'+uid,select:'id,name,owner_id,visibility,owner:profiles(username)',order:'name.asc,id.asc'}),
     api.all('grants',{user_id:eq(uid),select:'resource_type,resource_id',order:'resource_type.asc,resource_id.asc'})
   ]);
@@ -101,7 +101,9 @@ export async function mountCommunity(host,{api,uid,go,id}){
     for(const [type,rows] of [['session',sessions],['track',tracks],['event',events]])for(const row of rows){
       if(filter.value==='public'&&row.visibility!=='public'||filter.value==='friends'&&!follows.has(row.owner_id)||filter.value==='direct'&&!direct.has(type+'/'+row.id))continue;
       const route=type==='event'?row.kind:type;
-      record(list,row.title||row.name||date(row.started_at),route+' · '+(row.owner?.username||'Rider'),'#'+route+'/'+row.id);
+      const owner=route+' · '+(row.owner?.username||'Rider');
+      record(list,row.title||row.name||date(row.started_at),type==='session'?owner+' · '+sessionEquipment(row):owner,
+        '#'+route+'/'+row.id,type==='session'?sessionBest(row):'');
     }
     if(!list.childElementCount)list.append(el('p','No matching shared items.'));
   }

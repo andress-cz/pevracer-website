@@ -38,8 +38,16 @@ export const eq=id=>'eq.'+id;
 export const date=value=>value?new Date(value).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'}):'';
 export const km=value=>Number.isFinite(value)?(value/1000).toFixed(2)+' km':'—';
 export function duration(ms){if(ms==null||!Number.isFinite(+ms))return '—';const s=Math.round(ms);return Math.floor(s/60000)+':'+String(Math.floor(s/1000)%60).padStart(2,'0')+'.'+String(s%1000).padStart(3,'0');}
+export function sessionEquipment(row,trackName=row.track?.name){
+  return [row.eucName?.trim()||'Unknown vehicle',trackName||(row.track_local_id?'Track unavailable':'No track')].join(' · ');
+}
+export function sessionBest(row){
+  const best=el('span',null,'session-best');
+  best.append(el('small','Best lap'),el('strong',row.best_lap_ms>0?duration(row.best_lap_ms):'—'));
+  return best;
+}
 export function record(host,title,detail,href,stat=''){
-  const a=link('',href,'record'),body=el('span');body.append(el('b',title),el('small',detail));a.append(body,el('strong',stat));host.append(a);
+  const a=link('',href,'record'),body=el('span');body.append(el('b',title),el('small',detail));a.append(body,stat instanceof Node ? stat : el('strong',stat));host.append(a);
 }
 export function formAt(host){const f=el('form');host.append(f);return f;}
 export function metrics(host,items){

@@ -1,3 +1,5 @@
+import {sessionEquipment,duration} from './ui.js';
+import {lapTable,sectorTimes} from './lap-table.js';
 import { mountTrack } from './track-editor.js';
 
 function el(tag, text, className) {
@@ -39,22 +41,11 @@ function group(...nodes) {
 function date(value) {
   return new Date(value).toLocaleString(undefined, {dateStyle:'medium',timeStyle:'short'});
 }
-function lapTime(ms) {
-  if (!Number.isFinite(ms) || ms <= 0) return '—';
-  const secs = Math.floor(ms/1000);
-  return Math.floor(secs/60) + ':' + String(secs%60).padStart(2,'0') + '.' + String(Math.floor(ms)%1000).padStart(3,'0');
-}
 function when(row) {
   if (row.kind === 'leaderboard') return 'Open leaderboard';
   if (new Date(row.starts_at) > Date.now()) return 'Upcoming';
   if (row.ends_at && new Date(row.ends_at) <= Date.now()) return 'Ended';
   return 'Live';
-}
-function sectors(lap) {
-  try {
-    const values = Array.isArray(lap.sector_times) ? lap.sector_times : JSON.parse(lap.sector_times);
-    return Array.isArray(values) ? values : [];
-  } catch { return []; }
 }
 function eligible(row, event) {
   if (!row.is_mine || row.track_local_id !== event.track_local_id) return false;
@@ -102,20 +93,10 @@ function mountRankings(host, initial, go) {
       return;
     }
     page = Math.min(page, Math.ceil(ranked.length/pageSize)-1);
-    const table = el('table'), wrap = el('div',null,'ev-table'), head = table.createTHead().insertRow();
-    for (const label of ['Place','Rider','Lap','Time','Session']) {
-      const th=el('th',label);th.scope='col';head.append(th);
-    }
-    const body=table.createTBody();
-    for (const [index,{row,time}] of ranked.slice(page*pageSize,(page+1)*pageSize).entries()) {
-      const tr=body.insertRow();
-      tr.insertCell().textContent=String(page*pageSize+index+1);
-      tr.insertCell().textContent='@'+row.username;
-      tr.insertCell().textContent=[row.lap_number,row.direction].filter(v=>v!=null && v!=='').join(' · ');
-      tr.insertCell().textContent=lapTime(time);
-      tr.insertCell().append(button(row.session_title || 'Open session',()=>go('session',row.session_id)));
-    }
-    wrap.append(table);results.append(wrap);
+    const laps=ranked.map(({row},index)=>({...row,place:index+1}));
+    results.append(lapTable(laps,{caption:'Lap results',byDirection:false,visible:laps.slice(page*pageSize,(page+1)*pageSize),
+      before:[['Place',lap=>String(lap.place)],['Rider',lap=>'@'+lap.username]],
+      after:[['Session',lap=>button(lap.session_title||'Open session',()=>go('session',lap.session_id))]]}));
     if (ranked.length>pageSize) {
       const prev=button('Previous',()=>{page--;render();}),next=button('Next',()=>{page++;render();});
       prev.disabled=page===0;next.disabled=(page+1)*pageSize>=ranked.length;
@@ -124,7 +105,7 @@ function mountRankings(host, initial, go) {
   }
   for (const field of [mode,direction,sector]) field.onchange=()=>{page=0;render();};
   function update(laps) {
-    rows=laps.map(lap=>({...lap, splits:sectors(lap)}));
+    rows=laps.map(lap=>({...lap, splits:sectorTimes(lap),lapNumber:lap.lap_number,durationMs:Number(lap.duration_ms)}));
     const directions=[...new Set(rows.map(r=>r.direction).filter(Boolean))].sort();
     const count=rows.reduce((n,row)=>Math.max(n,row.splits.length),0);
     for (const [field, choices] of [[direction,[['','All directions'],...directions.map(d=>[d,d])]],
@@ -248,9 +229,9 @@ export async function mountEvents(container, {api,uid,kind='event',id,go,sharing
     const [laps,riders,entries,sessions,ownTracks]=member ? await Promise.all([
       lapsForEvent(),
       api.all('event_members',{event_id:'eq.'+id,select:'user_id,user:profiles(id,username)',order:'user_id.asc'}),
-      api.all('event_entries',{event_id:'eq.'+id,user_id:'eq.'+uid,select:'session_id,session:sessions(id,title,started_at)',order:'session_id.asc'}),
+      api.all('event_entries',{event_id:'eq.'+id,user_id:'eq.'+uid,select:'session_id,session:sessions(id,title,started_at,best_lap_ms,meta->>eucName)',order:'session_id.asc'}),
       api.all('sessions',{owner_id:'eq.'+uid,is_mine:'eq.true',track_local_id:'eq.'+event.track_local_id,
-        select:'id,title,is_mine,track_local_id,started_at,best_lap_ms',order:'started_at.desc,id.asc'}),
+        select:'id,title,is_mine,track_local_id,started_at,best_lap_ms,meta->>eucName',order:'started_at.desc,id.asc'}),
       api.rows('tracks',{owner_id:'eq.'+uid,local_id:'eq.'+event.track_local_id,select:'id'}),
     ]) : [[],[],[],[],[]];
     if (!current(n)) return;
@@ -314,7 +295,7 @@ export async function mountEvents(container, {api,uid,kind='event',id,go,sharing
     if (!rideList.size) rides.append(el('p','No matching sessions. Back up a ride marked Mine on this track'+(name==='event'?' within the event window.':'.')));
     for(const ride of rideList.values()) {
       const isEntered=entered.has(ride.id);
-      appendRow(rides,ride.title || 'Ride on '+event.track_name,date(ride.started_at),()=>write(async()=>{
+      appendRow(rides,ride.title || 'Ride on '+event.track_name,[date(ride.started_at),sessionEquipment(ride,event.track_name),'Best lap '+duration(ride.best_lap_ms)].join(' · '),()=>write(async()=>{
         if (isEntered) await api.write('event_entries','DELETE',{event_id:'eq.'+id,session_id:'eq.'+ride.id,user_id:'eq.'+uid});
         else await api.write('event_entries','POST',{on_conflict:'event_id,session_id'},
           {event_id:id,session_id:ride.id,user_id:uid},'resolution=ignore-duplicates');

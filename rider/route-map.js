@@ -120,11 +120,32 @@ export function mountReplayMap(host,data,summary,trackDoc){
   if(trackDoc)drawGates(L.layerGroup().addTo(map),trackDoc,{longitude:summary.centerLon});
   const bounds=L.latLngBounds([summary.south,summary.west],[summary.north,summary.east]);
   map.pevSetHome(bounds,homeOptions);
-  const marker=L.circleMarker(center,{radius:6,weight:3,color:'white',fillColor:'#2f4561',fillOpacity:1,interactive:false});
-  return index=>{
-    const point=coordinate(data,index);
-    if(!point){marker.remove();return;}
-    marker.setLatLng([point[0],nearLongitude(point[1],summary.centerLon)]);
+  const primary=L.circleMarker(center,{className:'replay-primary',radius:6,weight:2,color:'#fff',fillColor:'#23569e',fillOpacity:1,interactive:false});
+  // A larger ring remains visible around the primary dot when riders overlap.
+  const comparison=L.circleMarker(center,{className:'replay-comparison',radius:10,weight:4,color:'#ffb24d',fillColor:'#3a2414',fillOpacity:.7,interactive:false});
+  function place(marker,point){
+    if(!point){marker.remove();return null;}
+    const pos=L.latLng(point[0],nearLongitude(point[1],summary.centerLon));
+    marker.setLatLng(pos);
     if(!map.hasLayer(marker))marker.addTo(map);
+    return pos;
+  }
+  return (point,other,follow)=>{
+    const addingGhost=other && !map.hasLayer(comparison);
+    const ghost=place(comparison,other),current=place(primary,point);
+    if(addingGhost && current)primary.bringToFront();
+    if(!follow || !(current||ghost))return;
+    const focus=current||ghost;
+    let zoom=map.getZoom();
+    if(current && ghost){
+      // Keep both riders in frame while centering the camera on the active lap.
+      const padding=26, size=map.getSize();
+      const delta=map.project(ghost,zoom).subtract(map.project(current,zoom));
+      const ratio=Math.max(Math.abs(delta.x)/Math.max(1,size.x/2-padding),Math.abs(delta.y)/Math.max(1,size.y/2-padding));
+      if(ratio>1)zoom=Math.max(map.getMinZoom(),zoom-Math.ceil(Math.log2(ratio)));
+    }
+    if(zoom!==map.getZoom() || map.project(map.getCenter(),zoom).distanceTo(map.project(focus,zoom))>=1){
+      map.setView(focus,zoom,{animate:false});
+    }
   };
 }

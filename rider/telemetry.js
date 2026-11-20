@@ -1,3 +1,4 @@
+import {lapOption,sectorTimes} from './lap-table.js';
 import {createTelemetryChart} from './telemetry-chart.js';
 import {coordinate, decodeRecording, elapsedMs, exportRecording, gpsDistance, speed} from './telemetry-codec.js';
 import {mountVideo} from './telemetry-video.js';
@@ -89,16 +90,6 @@ function nearest(times,time,lo=0,hi=times.length-1) {
   }
   return lo;
 }
-function lapName(lap) {
-  if (lap.outLap) return 'Out lap';
-  return 'Lap '+lap.lapNumber+(lap.direction?' · '+lap.direction:'')+(lap.incomplete?' (incomplete)':'');
-}
-function sectorTimes(lap) {
-  try {
-    const values=JSON.parse(lap.sectorTimesJson || '[]');
-    return Array.isArray(values) ? values : [];
-  } catch { return []; }
-}
 function render(container,data,blob,session,name,onCreateTrack,loadComparisons,loadTracks,onSaveTiming) {
   const summary=prepare(data), {times,dist}=summary, last=data.count-1;
   const root=el('section',null,'tel-view');
@@ -141,7 +132,7 @@ function render(container,data,blob,session,name,onCreateTrack,loadComparisons,l
   const lapRows=usableLaps(session?.laps,data.count);
   let external=null,comparisonTicket=0;
   const compareSource=()=>external || {data,summary,laps:lapRows};
-  const keyOptions=lapRows.map((lap,i)=>[String(i),lapName(lap)]);
+  const keyOptions=lapRows.map((lap,i)=>[String(i),lapOption(lap)]);
   const lap=choose('View',[['','Whole session'],...keyOptions]);
   const compare=choose('Compare with',[['','No comparison'],...keyOptions]);
   compare.control.hidden=true;
@@ -183,7 +174,7 @@ function render(container,data,blob,session,name,onCreateTrack,loadComparisons,l
     });
     function setComparisonLaps(rows) {
       compare.select.replaceChildren();
-      for(const [val,label] of [['','No comparison'],...rows.map((row,i)=>[String(i),lapName(row)])]) {
+      for(const [val,label] of [['','No comparison'],...rows.map((row,i)=>[String(i),lapOption(row)])]) {
         const option=el('option',label); option.value=val;compare.select.append(option);
       }
       if(external && rows.length)compare.select.value='0';
@@ -191,6 +182,7 @@ function render(container,data,blob,session,name,onCreateTrack,loadComparisons,l
     }
     shared.append(add,note);controls.append(shared);
   }
+  const mapKey=el('div',null,'rider-map-key');
   const compareReadout=el('p',null,'tel-caption');
   const play=btn('Play',togglePlay);
   const seek=el('input');
@@ -205,11 +197,31 @@ function render(container,data,blob,session,name,onCreateTrack,loadComparisons,l
     const axis=xAxis==='distance'?dist:times;
     setSample(nearest(axis,axis[first]+f*(axis[end]-axis[first]),first,end));
   }});
-  const setSample=(i)=>{
+  // A comparison rider starts at its own lap boundary and runs on the same
+  // elapsed clock, even when the chart is comparing distance through the lap.
+  function positionAt(recording,axis,lo,hi,time) {
+    const i=nearest(axis,time,lo,hi),point=coordinate(recording,i);
+    if(i===lo || time>=axis[i] || !point)return point;
+    const prev=coordinate(recording,i-1);
+    if(!prev)return null;
+    const f=(time-axis[i-1])/(axis[i]-axis[i-1]);
+    const lonDelta=((point[1]-prev[1]+540)%360)-180;
+    return [prev[0]+(point[0]-prev[0])*f,prev[1]+lonDelta*f];
+  }
+  function updateRiders(time) {
+    const point=positionAt(data,times,first,end,time);
+    let comparison=null;
+    if(compareRange){
+      const source=compareSource(), [lo,hi]=compareRange, axis=source.summary.times;
+      comparison=positionAt(source.data,axis,lo,hi,axis[lo]+time-times[first]);
+    }
+    locate(point,comparison,playing);
+  }
+  const setSample=(i,time=times[i])=>{
     selectedIndex=Math.max(first,Math.min(end,i));
     seek.value=String(selectedIndex);
     readout.textContent=clock(times[selectedIndex]-times[first],true);
-    locate(selectedIndex);
+    updateRiders(time);
     chart.setSample(selectedIndex);
     seek.setAttribute('aria-valuetext',readout.textContent);
   };
@@ -227,9 +239,12 @@ function render(container,data,blob,session,name,onCreateTrack,loadComparisons,l
     const source=compareSource();
     compareRange=compare.select.value===''?null:lapRange(compare.select.value,source.laps,source.data.count);
     xAxis=compareRange && dist[end]>dist[first] && source.summary.dist[compareRange[1]]>source.summary.dist[compareRange[0]]?'distance':'time';
+    mapKey.hidden=!compareRange || !summary.points;
+    mapKey.replaceChildren();
     compareReadout.textContent='';
     if(compareRange){
       const a=lapRows[+lap.select.value], b=source.laps[+compare.select.value];
+      mapKey.append(el('span','Rider · '+lapOption(a),'primary-rider'),el('span','Comparison · '+lapOption(b),'comparison-rider'));
       const delta=(v,w)=>Number.isFinite(v)&&Number.isFinite(w)&&v>0&&w>0?((v-w>=0?'+':'')+((v-w)/1000).toFixed(3)+' s'):'—';
       const bSectors=sectorTimes(b);
       compareReadout.textContent='Lap difference '+delta(a.durationMs,b.durationMs)+
@@ -237,8 +252,8 @@ function render(container,data,blob,session,name,onCreateTrack,loadComparisons,l
     }
     seek.min=String(first);seek.max=String(end);
     const attribute=xAxis==='distance'?'dist':'times';
-    const plots=[{data,axis:summary[attribute],first,last:end,name:lap.select.value===''?'Whole session':lapName(lapRows[+lap.select.value])}];
-    if(compareRange)plots.push({data:source.data,axis:source.summary[attribute],first:compareRange[0],last:compareRange[1],name:lapName(source.laps[+compare.select.value])});
+    const plots=[{data,axis:summary[attribute],first,last:end,name:lap.select.value===''?'Whole session':lapOption(lapRows[+lap.select.value])}];
+    if(compareRange)plots.push({data:source.data,axis:source.summary[attribute],first:compareRange[0],last:compareRange[1],name:lapOption(source.laps[+compare.select.value])});
     chart.setScope(plots,xAxis);setSample(first);
   }
   function stop() {
@@ -247,7 +262,8 @@ function render(container,data,blob,session,name,onCreateTrack,loadComparisons,l
   function loop(now) {
     if(!playing || !root.isConnected) {stop();return;}
     const t=startTime+now-started;
-    setSample(nearest(times,t,first,end));
+    const time=Math.min(t,times[end]);
+    setSample(nearest(times,time,first,end),time);
     if(t>=times[end]) stop(); else frame=requestAnimationFrame(loop);
   }
   function togglePlay() {
@@ -278,14 +294,14 @@ function render(container,data,blob,session,name,onCreateTrack,loadComparisons,l
     }
     onCreateTrack(points,name);
   }));
-  root.append(overview,map,controls,chart.box,scrub,compareReadout,exports);
+  root.append(overview,map,mapKey,controls,chart.box,scrub,compareReadout,exports);
   const video=el('div');root.append(video);
   container.replaceChildren(root);
   if(summary.points){
     import('./route-map.js').then(({mountReplayMap})=>{
       if(!root.isConnected)return;
       locate=mountReplayMap(map,data,summary,session?.track_doc);
-      locate(selectedIndex);
+      updateRiders(times[selectedIndex]);
     }).catch(()=>{if(root.isConnected)map.textContent='The satellite map could not be opened.';});
   } else {
     map.className='tel-route-empty';

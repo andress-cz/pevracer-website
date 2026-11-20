@@ -1,3 +1,4 @@
+import {lapTable,lapLabel} from './lap-table.js';
 import {coordinate,gpsDistance} from './telemetry-codec.js';
 
 const rad=Math.PI/180, earth=6371000;
@@ -183,14 +184,19 @@ export function mountTiming(container,{data,session,loadTracks,onSaveTiming}) {
           if(!analysis.laps.length){status.textContent='No gate crossings found on this track.';return;}
           const completed=analysis.laps.filter(l=>!l.incomplete);
           status.textContent=completed.length+' completed laps. Choose the laps to include before saving.';
-          for(const lap of analysis.laps) {
-            const line=el('label');line.className='tel-check';
-            const check=el('input');check.type='checkbox';check.checked=!lap.hidden;
-            const label=(lap.outLap?'Out lap':'Lap '+lap.lapNumber)+' · '+(lap.incomplete?'Incomplete':(lap.durationMs/1000).toFixed(3)+' s')+
-              (lap.direction?' · '+lap.direction:'');
-            check.onchange=()=>lap.hidden=!check.checked;
-            line.append(check,document.createTextNode(label));result.append(line);
+          const table=el('div');result.append(table);
+          function drawPreview(){
+            table.replaceChildren(lapTable(analysis.laps,{caption:'Preview lap times',after:[['Include',lap=>{
+              const check=el('input');check.type='checkbox';check.checked=!lap.hidden;
+              check.setAttribute('aria-label','Include '+lapLabel(lap));
+              check.onchange=()=>{
+                lap.hidden=!check.checked;drawPreview();
+                table.querySelectorAll('input')[analysis.laps.indexOf(lap)].focus();
+              };
+              return check;
+            }]]}));
           }
+          drawPreview();
           if(onSaveTiming){
             const save=button('Save track and lap times',async()=>{
               save.disabled=true;controls.inert=true;result.inert=true;

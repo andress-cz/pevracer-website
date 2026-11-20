@@ -1,6 +1,7 @@
+import {lapTable} from './lap-table.js';
 import {auth,client} from './api.js';
 import {sessionFilter} from './session-filter.js';
-import {el,eq,link,panel,button,formAt,field,submit,message,record,metrics,date,duration,km} from './ui.js';
+import {el,eq,link,panel,button,formAt,field,submit,message,record,sessionEquipment,sessionBest,metrics,date,duration,km} from './ui.js';
 import {mountEvents} from './events.js';
 import {mountTrack,emptyTrack,trackFromRoute} from './track-editor.js';
 import {mountTelemetry,mountLocalAnalysis} from './telemetry.js';
@@ -88,15 +89,19 @@ async function createTrack(host,ctx){
   else try{show(trackFromRoute(source.points,{name:source.name}));}catch(e){box.textContent=e.message;}
 }
 function browse(host,rows,kind){
-  const filter=field(host,'Search '+kind+'s','search','search',{placeholder:kind==='session'?'Title or date':'Track name'});
+  const filter=field(host,'Search '+kind+'s','search','search',{placeholder:kind==='session'?'Title, date, vehicle, or track':'Track name'});
   const options=kind==='session'?sessionFilter(host,rows):null;
   const list=el('div',null,'records');host.append(list);
   function draw(){
     list.replaceChildren();const term=filter.value.trim().toLowerCase();
     for(const item of rows){
       if(options&&!options.matches(item))continue;
-      const title=item.title||item.name||date(item.started_at),detail=kind==='session'?[date(item.started_at),km(item.distance_m),item.lap_count+(item.lap_count===1?' lap':' laps')].join(' · '):item.visibility;
-      if((title+' '+detail).toLowerCase().includes(term))record(list,title,detail,'#'+kind+'/'+item.id,kind==='session'&&item.best_lap_ms?duration(item.best_lap_ms):'');
+      const title=item.title||item.name||date(item.started_at);
+      const detail=kind==='session'?[date(item.started_at),sessionEquipment(item),item.lap_count+(item.lap_count===1?' lap':' laps')].join(' · '):item.visibility;
+      if(!(title+' '+detail).toLowerCase().includes(term))continue;
+      if(kind==='session'){
+        record(list,title,detail,'#session/'+item.id,sessionBest(item));
+      }else record(list,title,detail,'#track/'+item.id);
     }
     if(!list.childElementCount)list.append(el('p',rows.length?'No matching '+kind+'s.':'Your cloud library is empty. On Android, open Social → Account → Back up now to bring your '+kind+'s here.','empty'));
   }
@@ -143,11 +148,15 @@ async function detail(host,ctx,type,id){
     const box=panel(host,'Track layout');mountTrack(box,{doc:row.doc,onSave:mine?async doc=>{await savePatch({doc,name:doc.name});render();}:undefined});
     const trackSessions=await api.all('sessions',{track_local_id:eq(row.local_id),select:'id,title,started_at,laps,owner:profiles(username)',order:'started_at.desc,id.asc'});
     const lapBox=panel(host,'Laps on this track');
-    const rows=trackSessions.flatMap(s=>(s.laps||[]).filter(l=>l.durationMs>0&&!l.hidden&&!l.incomplete&&!l.outLap).map(l=>({session:s,lap:l}))).sort((a,b)=>a.lap.durationMs-b.lap.durationMs);
+    const rows=trackSessions.flatMap(session=>(session.laps||[]).filter(l=>l.durationMs>0&&!l.hidden&&!l.incomplete&&!l.outLap).map(l=>({...l,session}))).sort((a,b)=>a.durationMs-b.durationMs);
     if(!rows.length)lapBox.append(el('p','No completed laps are visible on this track yet.'));
-    const list=el('div',null,'records');lapBox.append(list);let shown=0;
-    function more(){for(const {session:s,lap:l} of rows.slice(shown,shown+50))record(list,s.title||date(s.started_at),'Lap '+l.lapNumber+' · '+(s.owner?.username||'Rider')+(l.direction?' · '+l.direction:''),'#session/'+s.id,duration(l.durationMs));shown+=50;}
-    more();if(shown<rows.length){const b=button(lapBox,'More laps',async()=>{more();b.hidden=shown>=rows.length;});}
+    else {
+      const list=el('div');lapBox.append(list);let shown=50;
+      function show(){list.replaceChildren(lapTable(rows,{caption:'Laps on this track',visible:rows.slice(0,shown),
+        before:[['Rider',l=>l.session.owner?.username||'Rider']],
+        after:[['Session',l=>link(l.session.title||date(l.session.started_at),'#session/'+l.session.id)]]}));}
+      show();if(shown<rows.length){const b=button(lapBox,'More laps',async()=>{shown+=50;show();b.hidden=shown>=rows.length;});}
+    }
     if(!mine)button(host,'Save a private copy',async()=>{const doc={...row.doc,id:crypto.randomUUID()};const [copy]=await api.write('tracks','POST',{select:'id'},{owner_id:uid,local_id:doc.id,name:doc.name,doc,visibility:'private'},'return=representation');go('track',copy.id);});
   }else{
     metrics(host,[['Distance',km(row.distance_m)],['Top speed',row.max_speed_kmh==null?'—':row.max_speed_kmh.toFixed(1)+' km/h'],['Laps',row.lap_count],['Best lap',duration(row.best_lap_ms)]]);
@@ -167,13 +176,16 @@ async function detail(host,ctx,type,id){
       }})):[]});
     const laps=Array.isArray(row.laps)?row.laps:[];
     if(laps.length){
-      const box=panel(host,'Lap times');for(const lap of laps){
-        const line=el('div',null,'record');line.append(el('span','Lap '+lap.lapNumber+' · '+duration(lap.durationMs)+(lap.hidden?' · Hidden':lap.outLap?' · Out lap':lap.incomplete?' · Incomplete':'')));
-        if(mine)button(line,lap.hidden?'Show lap':'Hide lap',async()=>{
+      const box=panel(host,'Lap times');
+      const after=mine?[['Visibility',lap=>{
+        const cell=el('div');
+        button(cell,lap.hidden?'Show lap':'Hide lap',async()=>{
           const next=laps.map(l=>l===lap?{...l,hidden:!l.hidden}:l),timed=next.filter(l=>!l.hidden&&!l.outLap&&!l.incomplete&&l.durationMs>0);
           await savePatch({laps:next,lap_count:next.filter(l=>!l.hidden).length,best_lap_ms:timed.reduce((n,l)=>n==null?l.durationMs:Math.min(n,l.durationMs),null)});render();
-        });box.append(line);
-      }
+        });
+        return cell;
+      }]]:[];
+      box.append(lapTable(laps,{caption:'Session lap times',after}));
     }
     if(mine){
       const f=formAt(panel(host,'Session details','Changes apply to the cloud copy. A later Android backup of an edited ride can replace them.'));
