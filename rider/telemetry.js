@@ -50,15 +50,31 @@ const metrics = [
   ['power','Power','W'],['pwm_pct','PWM','%'],['motor_temp_c','Motor temperature','°C'],
   ['battery_pct','Battery','%'],['pitch_deg','Pitch','°'],['h_acc_m','Position accuracy','m'],
   ['gx','Longitudinal acceleration','g'],['gy','Lateral acceleration','g'],['gz','Vertical acceleration','g'],
-  ['gyro_x','Roll rate','°/s'],['gyro_y','Pitch rate','°/s'],['gyro_z','Yaw rate','°/s']
+  ['gyro_x','Roll rate','°/s'],['gyro_y','Pitch rate','°/s'],['gyro_z','Yaw rate','°/s'],
+  ['time_delta','Time Δ','s'],['speed_delta','Speed Δ','km/h']
 ];
-function metricValue(data,i,key) {
-  if (key === 'speed') return speed(data,i);
+function metricValue(recording,i,key) {
+  if(key==='time_delta'||key==='speed_delta') {
+    if(recording!==data||!compareRange)return null;
+    const other=compareSource(),[lo,hi]=compareRange;
+    const distance=summary.dist[i]-summary.dist[first]+other.summary.dist[lo];
+    const axis=other.summary.dist,index=nearest(axis,distance,lo,hi),before=Math.max(lo,index-1);
+    const span=axis[index]-axis[before],fraction=span>0?(distance-axis[before])/span:0;
+    const a=key==='time_delta'?times[i]-times[first]:speed(data,i);
+    const beforeValue=key==='time_delta'?other.summary.times[before]:speed(other.data,before);
+    const afterValue=key==='time_delta'?other.summary.times[index]:speed(other.data,index);
+    if(beforeValue==null||afterValue==null)return null;
+    const b=key==='time_delta'
+      ?beforeValue+(afterValue-beforeValue)*fraction-other.summary.times[lo]
+      :beforeValue+(afterValue-beforeValue)*fraction;
+    return a==null||b==null?null:key==='time_delta'?(a-b)/1000:a-b;
+  }
+  if (key === 'speed') return speed(recording,i);
   if (key === 'power') {
-    const volts = data.get(i,'voltage_v'), amps = data.get(i,'current_a');
+    const volts = recording.get(i,'voltage_v'), amps = recording.get(i,'current_a');
     return volts == null || amps == null ? null : volts * amps;
   }
-  return data.get(i,key);
+  return recording.get(i,key);
 }
 function prepare(data) {
   const times = new Float64Array(data.count), dist = new Float64Array(data.count);
@@ -191,7 +207,10 @@ function render(container,data,blob,session,name,onCreateTrack,loadComparisons,l
   const readout=el('output');
   const scrub=el('div',null,'tel-scrub'); scrub.append(play,seek,readout);
   let selectedIndex=0, first=0, end=last, frame=0, playing=false, started=0, startTime=0;
-  let compareRange=null, xAxis='time';
+  let compareRange=null, xAxis='distance';
+  const axisChoice=choose('Horizontal axis',[['distance','Distance'],['time','Time']]);
+  axisChoice.select.value=xAxis;
+  controls.append(axisChoice.control);
   const chart=createTelemetryChart({metrics,metricValue,onSeek:f=>{
     stop();
     const axis=xAxis==='distance'?dist:times;
@@ -240,7 +259,9 @@ function render(container,data,blob,session,name,onCreateTrack,loadComparisons,l
     compareRange=compare.select.value===''?null:lapRange(compare.select.value,source.laps,source.data.count);
     locate.setScope?.(first,end,compareRange?source.data:null,compareRange?source.summary:null,
       compareRange?.[0],compareRange?.[1]);
-    xAxis=compareRange && dist[end]>dist[first] && source.summary.dist[compareRange[1]]>source.summary.dist[compareRange[0]]?'distance':'time';
+    if(xAxis==='distance'&&(dist[end]<=dist[first]||compareRange&&source.summary.dist[compareRange[1]]<=source.summary.dist[compareRange[0]])){
+      xAxis='time';axisChoice.select.value=xAxis;
+    }
     mapKey.hidden=!compareRange || !summary.points;
     mapKey.replaceChildren();
     compareReadout.textContent='';
@@ -275,6 +296,7 @@ function render(container,data,blob,session,name,onCreateTrack,loadComparisons,l
     play.textContent='Pause';frame=requestAnimationFrame(loop);
   }
   lap.select.onchange=compare.select.onchange=chooseScope;
+  axisChoice.select.onchange=()=>{xAxis=axisChoice.select.value;chooseScope();};
   seek.oninput=()=>{stop();setSample(Number(seek.value));};
   const exports=el('div',null,'tel-actions');
   const formats=[['csv','PEV Racer CSV'],['racebox','RaceBox CSV']];
