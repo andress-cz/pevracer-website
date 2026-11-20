@@ -54,21 +54,6 @@ const metrics = [
   ['time_delta','Time Δ','s'],['speed_delta','Speed Δ','km/h']
 ];
 function metricValue(recording,i,key) {
-  if(key==='time_delta'||key==='speed_delta') {
-    if(recording!==data||!compareRange)return null;
-    const other=compareSource(),[lo,hi]=compareRange;
-    const distance=summary.dist[i]-summary.dist[first]+other.summary.dist[lo];
-    const axis=other.summary.dist,index=nearest(axis,distance,lo,hi),before=Math.max(lo,index-1);
-    const span=axis[index]-axis[before],fraction=span>0?(distance-axis[before])/span:0;
-    const a=key==='time_delta'?times[i]-times[first]:speed(data,i);
-    const beforeValue=key==='time_delta'?other.summary.times[before]:speed(other.data,before);
-    const afterValue=key==='time_delta'?other.summary.times[index]:speed(other.data,index);
-    if(beforeValue==null||afterValue==null)return null;
-    const b=key==='time_delta'
-      ?beforeValue+(afterValue-beforeValue)*fraction-other.summary.times[lo]
-      :beforeValue+(afterValue-beforeValue)*fraction;
-    return a==null||b==null?null:key==='time_delta'?(a-b)/1000:a-b;
-  }
   if (key === 'speed') return speed(recording,i);
   if (key === 'power') {
     const volts = recording.get(i,'voltage_v'), amps = recording.get(i,'current_a');
@@ -211,7 +196,21 @@ function render(container,data,blob,session,name,onCreateTrack,loadComparisons,l
   const axisChoice=choose('Horizontal axis',[['distance','Distance'],['time','Time']]);
   axisChoice.select.value=xAxis;
   controls.append(axisChoice.control);
-  const chart=createTelemetryChart({metrics,metricValue,onSeek:f=>{
+  const chartMetricValue=(recording,i,key)=>{
+    if(key!=='time_delta'&&key!=='speed_delta')return metricValue(recording,i,key);
+    if(recording!==data||!compareRange)return null;
+    const other=compareSource(),[lo,hi]=compareRange;
+    const target=summary.dist[i]-summary.dist[first]+other.summary.dist[lo];
+    const axis=other.summary.dist,index=nearest(axis,target,lo,hi),before=Math.max(lo,index-1);
+    const span=axis[index]-axis[before],fraction=span>0?(target-axis[before])/span:0;
+    const primary=key==='time_delta'?times[i]-times[first]:speed(data,i);
+    const beforeValue=key==='time_delta'?other.summary.times[before]:speed(other.data,before);
+    const afterValue=key==='time_delta'?other.summary.times[index]:speed(other.data,index);
+    if(primary==null||beforeValue==null||afterValue==null)return null;
+    const comparison=beforeValue+(afterValue-beforeValue)*fraction-(key==='time_delta'?other.summary.times[lo]:0);
+    return key==='time_delta'?(primary-comparison)/1000:primary-comparison;
+  };
+  const chart=createTelemetryChart({metrics,metricValue:chartMetricValue,onSeek:f=>{
     stop();
     const axis=xAxis==='distance'?dist:times;
     setSample(nearest(axis,axis[first]+f*(axis[end]-axis[first]),first,end));
