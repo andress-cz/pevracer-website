@@ -1,4 +1,4 @@
-import {sessionEquipment,duration} from './ui.js';
+import {sessionEquipment,sessionTitle,duration} from './ui.js';
 import {lapTable,sectorTimes} from './lap-table.js';
 import { mountTrack } from './track-editor.js';
 
@@ -229,9 +229,9 @@ export async function mountEvents(container, {api,uid,kind='event',id,go,sharing
     const [laps,riders,entries,sessions,ownTracks]=member ? await Promise.all([
       lapsForEvent(),
       api.all('event_members',{event_id:'eq.'+id,select:'user_id,user:profiles(id,username)',order:'user_id.asc'}),
-      api.all('event_entries',{event_id:'eq.'+id,user_id:'eq.'+uid,select:'session_id,session:sessions(id,title,started_at,best_lap_ms,meta->>eucName)',order:'session_id.asc'}),
+      api.all('event_entries',{event_id:'eq.'+id,user_id:'eq.'+uid,select:'session_id,session:sessions(id,title,started_at,best_lap_ms,meta->>eucName,meta->>displayName)',order:'session_id.asc'}),
       api.all('sessions',{owner_id:'eq.'+uid,is_mine:'eq.true',track_local_id:'eq.'+event.track_local_id,
-        select:'id,title,is_mine,track_local_id,started_at,best_lap_ms,meta->>eucName',order:'started_at.desc,id.asc'}),
+        select:'id,title,is_mine,track_local_id,started_at,best_lap_ms,meta->>eucName,meta->>displayName',order:'started_at.desc,id.asc'}),
       api.rows('tracks',{owner_id:'eq.'+uid,local_id:'eq.'+event.track_local_id,select:'id'}),
     ]) : [[],[],[],[],[]];
     if (!current(n)) return;
@@ -292,10 +292,10 @@ export async function mountEvents(container, {api,uid,kind='event',id,go,sharing
     for(const [sessionId,row] of entered) if(!rideList.has(sessionId) && row) rideList.set(sessionId,row);
     const rides=disclosure('My sessions · '+entries.length+' entered');
     rides.append(el('p','Entering a session lets every member open its route and full recording.'));
-    if (!rideList.size) rides.append(el('p','No matching sessions. Back up a ride marked Mine on this track'+(name==='event'?' within the event window.':'.')));
+    if (!rideList.size) rides.append(el('p','No matching sessions. Sync a ride marked Mine on this track from your phone'+(name==='event'?' within the event window.':'.')));
     for(const ride of rideList.values()) {
       const isEntered=entered.has(ride.id);
-      appendRow(rides,ride.title || 'Ride on '+event.track_name,[date(ride.started_at),sessionEquipment(ride,event.track_name),'Best lap '+duration(ride.best_lap_ms)].join(' · '),()=>write(async()=>{
+      appendRow(rides,sessionTitle(ride.displayName,ride.started_at) || 'Ride on '+event.track_name,[date(ride.started_at),sessionEquipment(ride,event.track_name),'Best lap '+duration(ride.best_lap_ms)].join(' · '),()=>write(async()=>{
         if (isEntered) await api.write('event_entries','DELETE',{event_id:'eq.'+id,session_id:'eq.'+ride.id,user_id:'eq.'+uid});
         else await api.write('event_entries','POST',{on_conflict:'event_id,session_id'},
           {event_id:id,session_id:ride.id,user_id:uid},'resolution=ignore-duplicates');

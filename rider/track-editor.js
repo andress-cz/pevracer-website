@@ -1,4 +1,4 @@
-import {gatesOf} from './track-gates.js';
+import {gatesOf,halfWidth} from './track-gates.js';
 
 // Version 1 matches TrackCodec and the gate ordering used by the Android lap analyzer.
 const FORMAT = 'pevracer-track';
@@ -29,6 +29,41 @@ function leg(from, to) {
   const north = to.lat - from.lat;
   return { distance: Math.hypot(east, north) * M_PER_DEG,
     bearing: (Math.atan2(east, north) / RAD + 360) % 360, lonDelta };
+}
+
+// Nearest point of a recorded route: its travel bearing and distance (m), or null.
+function nearestOnRoute(route, lat, lon) {
+  let best=null;
+  for (let i=1;i<route.length;i++) {
+    const a=route[i-1], b=route[i];
+    if (!validPosition(a?.lat,a?.lon) || !validPosition(b?.lat,b?.lon)) continue;
+    const ab=leg(a,b), ap=leg(a,{lat,lon});
+    if (!(ab.distance>0)) continue;
+    const along=Math.max(0,Math.min(ab.distance, ap.distance*Math.cos((ap.bearing-ab.bearing)*RAD)));
+    const across=Math.sqrt(Math.max(0, ap.distance**2 + along**2 - 2*ap.distance*along*Math.cos((ap.bearing-ab.bearing)*RAD)));
+    if (!best || across<best.distance) best={distance:across, bearing:ab.bearing};
+  }
+  return best;
+}
+
+const angleBetween=(a,b)=>Math.abs((((a-b)%360)+540)%360-180);
+
+/**
+ * Like Android: a gate placed on the route takes the route's travel direction there. The route
+ * may have been ridden the other way round than the track, so the direction is turned to agree
+ * with the start gate. Laps ridden the opposite way still time (all gates reverse together).
+ * Returns null away from the route, where the gate keeps its bearing.
+ */
+export function routeGateBearing(route, doc, lat, lon) {
+  if (!Array.isArray(route) || route.length<2) return null;
+  const here=nearestOnRoute(route,lat,lon);
+  if (!here || here.distance>50) return null;
+  let bearing=here.bearing;
+  if (validPosition(doc.startFinishLat,doc.startFinishLon) && Number.isFinite(doc.startFinishBearingDeg)) {
+    const atStart=nearestOnRoute(route,doc.startFinishLat,doc.startFinishLon);
+    if (atStart && atStart.distance<=30 && angleBetween(atStart.bearing,doc.startFinishBearingDeg)>90) bearing=(bearing+180)%360;
+  }
+  return Number(bearing.toFixed(1));
 }
 
 // The interchange stores gate geometry and track bounds, while the route stays in the recording.
@@ -92,9 +127,8 @@ function validateDoc(doc) {
   const seen = new Set();
   for (const s of sectors) {
     if (!s || !Number.isSafeInteger(s.index) || s.index < 0 || seen.has(s.index) || typeof s.name !== 'string' ||
-        !validPosition(s.entryLat,s.entryLon) || (s.bearingDeg != null && !Number.isFinite(s.bearingDeg)) ||
-        !Number.isFinite(s.halfWidthM ?? 15) || (s.halfWidthM ?? 15) <= 0)
-      throw Error('Each sector needs a valid position, name, width and unique index.');
+        !validPosition(s.entryLat,s.entryLon) || (s.bearingDeg != null && !Number.isFinite(s.bearingDeg)))
+      throw Error('Each sector needs a valid position, name and unique index.');
     seen.add(s.index);
   }
   for (const gate of gatesOf(doc)) {
@@ -106,11 +140,15 @@ function validateDoc(doc) {
       doc.minLat > doc.maxLat || doc.minLon > doc.maxLon) throw Error('The track bounds are invalid.');
 }
 
-function exportDoc(doc) {
+export function exportDoc(doc) {
   const copy = structuredClone(doc);
   copy.format = FORMAT;
   copy.version = 1;
   copy.name = copy.name.trim();
+  // Android stores widths as numbers. Never save a cleared or invalid width as null.
+  copy.gateHalfWidthM = halfWidth(copy.gateHalfWidthM);
+  for (const s of copy.sectors ?? []) if (s) s.halfWidthM = halfWidth(s.halfWidthM, s.index === 0 ? copy.gateHalfWidthM : undefined);
+  if (copy.mode === 'POINT_TO_POINT') copy.finishHalfWidthM = halfWidth(copy.finishHalfWidthM, copy.gateHalfWidthM);
   const gates = gatesOf(copy);
   if (gates.every(g => validPosition(g.lat,g.lon))) {
     const lats = gates.map(g => g.lat), lons = gates.map(g => g.lon);
@@ -240,8 +278,13 @@ export function mountTrack(container, {doc:initial, onSave, route=[]} = {}) {
       const attrs={type:'number',step:'any',required:true};
       if(min!=null) attrs.min=min;if(max!=null) attrs.max=max;
       const input=textField(g[key],v=>{
+        // A cleared or non-positive width keeps the previous one instead of saving null.
+        if(key==='width' && !(Number.isFinite(v) && v>0))return;
         putGate(doc,selected,{[key]:v});draw();
       },attrs);
+      if(key==='width')input.addEventListener('change',()=>{
+        if(!(input.valueAsNumber>0))input.value=String(gatesOf(doc).find(item=>item.key===selected)?.width ?? 15);
+      });
       if(key==='lat'||key==='lon')input.addEventListener('change',()=>{
         const target=gatesOf(doc).find(item=>item.key===selected);
         if(target)mapView?.reveal(target.lat,target.lon);
@@ -255,10 +298,10 @@ export function mountTrack(container, {doc:initial, onSave, route=[]} = {}) {
     place.setAttribute('aria-pressed',String(placing));
     gateTools.append(place,btn('Add sector gate',()=>{
       if (!doc.sectors.some(s=>s.index===0)) doc.sectors.unshift({index:0,name:'S1',entryLat:doc.startFinishLat,entryLon:doc.startFinishLon,
-        bearingDeg:doc.startFinishBearingDeg,halfWidthM:doc.gateHalfWidthM ?? 15});
+        bearingDeg:doc.startFinishBearingDeg,halfWidthM:halfWidth(doc.gateHalfWidthM)});
       const highest=doc.sectors.reduce((last,s)=>Math.max(last,s.index),0);
       const index=highest+1;
-      doc.sectors.push({index,name:'S'+(index+1),entryLat:null,entryLon:null,bearingDeg:g.bearing ?? 0,halfWidthM:15});
+      doc.sectors.push({index,name:'S'+(index+1),entryLat:null,entryLon:null,bearingDeg:g.bearing ?? 0,halfWidthM:halfWidth(doc.gateHalfWidthM)});
       selected='sector-'+index;placing=true;redrawEditor();
       say('Set the sector coordinates or place it on the map.');
     }));
@@ -314,8 +357,10 @@ export function mountTrack(container, {doc:initial, onSave, route=[]} = {}) {
     mapView=mountGateMap(map,{route,
       onPlace: editable ? position=>{
         if(!placing || form.inert)return;
-        putGate(doc,selected,{lat:Number(position.lat.toFixed(7)),lon:Number(position.lng.toFixed(7))});
-        placing=false;redrawEditor();say('Gate position updated.');
+        const lat=Number(position.lat.toFixed(7)),lon=Number(position.lng.toFixed(7));
+        const bearing=routeGateBearing(route,doc,lat,lon);
+        putGate(doc,selected,bearing==null?{lat,lon}:{lat,lon,bearing});
+        placing=false;redrawEditor();say(bearing==null?'Gate position updated.':'Gate placed across the route at '+bearing+'°.');
       } : null,
       onSelect: editable ? key=>{
         if(placing || form.inert)return;

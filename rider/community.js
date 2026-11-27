@@ -22,9 +22,10 @@ export async function mountSharing(host,{api,uid,type,row,go}){
     const values=type==='event'?[['invite','Invite only'],['friends','Friends'],['public','All signed-in riders']]:[['private','Private'],['friends','Friends'],['public','All signed-in riders']];
     field(f,'Visibility','visibility','select',{choices:values,value:row.visibility});
     submit(f,'Save visibility',async({visibility},out)=>{
-      const updated=await api.write(type+'s','PATCH',{id:eq(row.id),owner_id:eq(uid),select:'id'},{visibility},'return=representation');
+      const updated=await api.write(type+'s','PATCH',{id:eq(row.id),owner_id:eq(uid),select:type==='event'?'id':'id,updated_at'},{visibility},'return=representation');
       if(!updated.length)throw Error('This item is no longer available.');
-      row.visibility=visibility;message(out,'Visibility saved.');
+      // The update trigger moved updated_at; later edits on this page compare against it.
+      row.visibility=visibility;if(updated[0].updated_at)row.updated_at=updated[0].updated_at;message(out,'Visibility saved.');
     });
     if(links.length){
       const url=new URL('./',location.href);url.hash='community/'+links[0].token;

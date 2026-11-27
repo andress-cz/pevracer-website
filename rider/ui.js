@@ -36,6 +36,12 @@ export function submit(form,label,callback){
 }
 export const eq=id=>'eq.'+id;
 export const date=value=>value?new Date(value).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'}):'';
+// Android's sessionTitle: a session without meta.displayName is auto titled "yyyy-MM-dd HH:mm" (local time).
+export function sessionTitle(displayName,startedAt){
+  if(displayName?.trim())return displayName;
+  const d=new Date(startedAt),p=n=>String(n).padStart(2,'0');
+  return Number.isFinite(d.getTime())?d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes()):'';
+}
 export const km=value=>Number.isFinite(value)?(value/1000).toFixed(2)+' km':'—';
 export function duration(ms){if(ms==null||!Number.isFinite(+ms))return '—';const s=Math.round(ms);return Math.floor(s/60000)+':'+String(Math.floor(s/1000)%60).padStart(2,'0')+'.'+String(s%1000).padStart(3,'0');}
 export function sessionEquipment(row,trackName=row.track?.name){

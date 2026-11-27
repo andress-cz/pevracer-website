@@ -5,24 +5,46 @@ export const fields = ('elapsed_ns utc_ms lat lon alt_m gps_speed_mps heading_de
 const column = Object.fromEntries(fields.map((key, i) => [key, i]));
 const MiB = 1024 * 1024;
 const recordBytes = 176;
+// Android uploads recordings up to CloudConfig.MAX_RECORDING_BYTES (50 MB compressed).
+export const MAX_RECORDING_BYTES = 50 * MiB;
+// A 176-byte record always changes at least its 8-byte elapsed time, so deflate needs about
+// 5–6 bytes per record even for a parked wheel with frozen values (measured 31:1). Rides with
+// live GPS and sensor noise compress 1.3–2:1. 32× keeps every 50 MB upload openable (1.6 GB).
+export const MAX_EXPANDED_BYTES = 32 * MAX_RECORDING_BYTES;
+const MAX_TEXT_BYTES = 64 * MiB;
 const number = value => value != null && String(value).trim() !== '' && Number.isFinite(Number(value)) ? Number(value) : null;
 const textDecoder = new TextDecoder();
 
+// A ride cut off by a crash has no gzip trailer. SampleFileStore keeps every sample inflated
+// before the damage, so keep that output too; binary() then drops a partial last record.
+// A stream erroring at close discards output still queued. In a spec TransformStream, an
+// empty write completes only once everything inflated so far has been read, so drain first.
 async function inflate(blob) {
   if (!globalThis.DecompressionStream) throw Error('Open this recording in a browser that supports gzip decompression.');
-  const reader = blob.stream().pipeThrough(new DecompressionStream('gzip')).getReader();
+  const stream = new DecompressionStream('gzip'), writer = stream.writable.getWriter(), reader = stream.readable.getReader();
   const chunks = [];
-  let length = 0;
-  for (;;) {
-    const {value, done} = await reader.read();
-    if (done) break;
-    length += value.length;
-    if (length > 256 * MiB) {
-      await reader.cancel();
-      throw Error('This recording exceeds the 256 MB browser replay limit when expanded.');
+  let length = 0, tooLarge = false;
+  const output = (async () => {
+    for (;;) {
+      const {value, done} = await reader.read();
+      if (done) return;
+      length += value.length;
+      if (length > MAX_EXPANDED_BYTES) { tooLarge = true; await reader.cancel(); return; }
+      chunks.push(value);
     }
-    chunks.push(value);
-  }
+  })().catch(() => {});
+  try {
+    const input = blob.stream().getReader();
+    for (;;) {
+      const {value, done} = await input.read();
+      if (done) break;
+      await writer.write(value);
+    }
+    await writer.write(new Uint8Array(0));
+    await writer.close();
+  } catch {}
+  await output;
+  if (tooLarge) throw Error('This recording exceeds the '+MAX_EXPANDED_BYTES/MiB+' MB browser replay limit when expanded.');
   return new Blob(chunks).arrayBuffer();
 }
 
@@ -33,10 +55,9 @@ function binary(buffer) {
   if (![0x50455652, 0x45554352].includes(magic) || view.getUint16(4) !== 1) {
     throw Error('Unrecognized PEV Racer recording version.');
   }
-  if ((buffer.byteLength - 8) % recordBytes) throw Error('This recording is incomplete. Download the file again.');
   const offsets = [0,8,16,24,32,40,48,56,64,72,80,88,96,104,108,116,124,132,140,148,156,164,168];
   return {
-    count: (buffer.byteLength - 8) / recordBytes,
+    count: Math.floor((buffer.byteLength - 8) / recordBytes),
     get(index, field) {
       const idx = column[field];
       if (idx == null) return null;
@@ -162,15 +183,20 @@ function vbo(lines) {
 }
 
 export async function decodeRecording(blob) {
-  if (blob.size > 64 * MiB) throw Error('Choose a recording smaller than 64 MB.');
   const header = new Uint8Array(await blob.slice(0, 8).arrayBuffer());
   let data;
-  if (header[0] === 31 && header[1] === 139) data = binary(await inflate(blob));
-  else if (header[0] === 80 || header[0] === 69) {
+  if (header[0] === 31 && header[1] === 139) {
+    if (blob.size > MAX_RECORDING_BYTES) throw Error('Choose a recording smaller than '+MAX_RECORDING_BYTES/MiB+' MB.');
+    data = binary(await inflate(blob));
+  } else if (header[0] === 80 || header[0] === 69) {
     const magic = textDecoder.decode(header.slice(0,4));
-    if (magic === 'PEVR' || magic === String.fromCharCode(69,85,67,82)) data = binary(await blob.arrayBuffer());
+    if (magic === 'PEVR' || magic === String.fromCharCode(69,85,67,82)) {
+      if (blob.size > MAX_EXPANDED_BYTES) throw Error('Choose a recording smaller than '+MAX_EXPANDED_BYTES/MiB+' MB.');
+      data = binary(await blob.arrayBuffer());
+    }
   }
   if (!data) {
+    if (blob.size > MAX_TEXT_BYTES) throw Error('Choose a CSV or VBO file smaller than '+MAX_TEXT_BYTES/MiB+' MB.');
     const lines = (await blob.text()).split(/\r?\n/).map(s => s.trim()).filter(Boolean);
     if (!lines.length) throw Error('The recording is empty.');
     data = lines.some(s => s.toLowerCase() === '[data]') ? vbo(lines) : csv(lines);
@@ -201,10 +227,16 @@ const raceBoxHeaders = 'iTOW,Year,Month,Day,Hour,Minute,Second,Longitude,Latitud
 const vboKeys = 'sats time lat long velocity heading height vertvel longacc latacc';
 export function exportRecording(data, format, fallbackDate) {
   const firstTime = elapsedMs(data,0);
-  const utc0 = data.get(0,'utc_ms') ?? (Number.isFinite(fallbackDate) ? fallbackDate : 0);
+  const known = data.get(0,'utc_ms') ?? (Number.isFinite(fallbackDate) ? fallbackDate : null);
+  const utc0 = known ?? 0;
+  const rowUtc = i => data.get(i,'utc_ms') ?? (utc0 + elapsedMs(data,i) - firstTime);
   const pad = x => String(x).padStart(2,'0');
   const parts = [];
-  const d = new Date(utc0);
+  // VBO rows hold only UTC time of day. Android's VboCodec takes the ride date (and start time)
+  // from this header, so date it from the first exported row, or now as Android's writer does.
+  let firstRow = 0;
+  while (format === 'vbo' && firstRow < data.count - 1 && !coordinate(data,firstRow)) firstRow++;
+  const d = new Date(known == null && data.get(firstRow,'utc_ms') == null ? Date.now() : rowUtc(firstRow));
   let batch = format === 'csv' ? fields.join(',') + '\n' : format === 'racebox' ? raceBoxHeaders + '\n' :
     'File created on ' + pad(d.getUTCDate()) + '/' + pad(d.getUTCMonth()+1) + '/' + d.getUTCFullYear() +
     ' @ ' + d.toISOString().slice(11,19) + '\n[header]\nsatellites\ntime\nlatitude\nlongitude\nvelocity kmh\nheading\nheight\nvertical velocity kmh\nlong acc g\nlat acc g\n[column names]\n'+vboKeys+'\n[data]\n';
@@ -218,8 +250,7 @@ export function exportRecording(data, format, fallbackDate) {
     } else {
       const point = coordinate(data,i);
       if (!point) continue;
-      const utc = val('utc_ms') ?? (utc0 + elapsedMs(data,i) - firstTime);
-      const time = new Date(utc).toISOString().slice(11,23).replaceAll(':','');
+      const time = new Date(rowUtc(i)).toISOString().slice(11,23).replaceAll(':','');
       batch += [0,time,(point[0]*60).toFixed(8),(-point[1]*60).toFixed(8),
         ((val('gps_speed_mps') ?? 0)*3.6).toFixed(4),val('heading_deg') ?? 0,val('alt_m') ?? 0,0,val('gx') ?? 0,val('gy') ?? 0].join(' ') + '\n';
     }

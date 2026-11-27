@@ -1,7 +1,6 @@
-import {coordinate, elapsedMs, fields, gpsDistance, speed} from './telemetry-codec.js';
+import {coordinate, elapsedMs, fields, gpsDistance, speed, MAX_RECORDING_BYTES} from './telemetry-codec.js';
 
 const recordBytes = 176;
-const maxRecording = 50 * 1024 * 1024;
 async function sha256(blob) {
   const bytes = new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()));
   return Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
@@ -46,7 +45,7 @@ export async function saveImported(ctx,data,name,file,mine=false) {
   const head=new Uint8Array(await file.slice(0,2).arrayBuffer());
   const original=head[0]===31 && head[1]===139;
   const blob=original?file:await androidRecording(data);
-  if(blob.size>maxRecording)throw Error('The compressed recording exceeds the 50 MB cloud limit.');
+  if(blob.size>MAX_RECORDING_BYTES)throw Error('The compressed recording exceeds the '+MAX_RECORDING_BYTES/1048576+' MB cloud limit.');
   const hash=original?sourceHash:await sha256(blob),path=uid+'/'+crypto.randomUUID()+'.pevr.gz';
   let previous=null,distance=0,peak=null;
   const bounds={minLat:null,maxLat:null,minLon:null,maxLon:null};
@@ -61,7 +60,9 @@ export async function saveImported(ctx,data,name,file,mine=false) {
     if(velocity!=null)peak=Math.max(peak??velocity,velocity);
   }
   const duration=Math.max(0,Math.round(elapsedMs(data,data.count-1)-elapsedMs(data,0)));
-  const started=data.get(0,'utc_ms') ?? file.lastModified ?? Date.now();
+  let firstUtc=null;
+  for(let i=0;i<data.count && firstUtc==null;i++)firstUtc=data.get(i,'utc_ms');
+  const started=firstUtc ?? file.lastModified ?? Date.now();
   const ended=data.get(data.count-1,'utc_ms') ?? started+duration;
   const title=name.slice(0,160)||'Imported session';
   const row={owner_id:uid,local_id:id,title,started_at:new Date(started).toISOString(),duration_ms:duration,

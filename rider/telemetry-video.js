@@ -44,19 +44,28 @@ export function mountVideo(host,context){
     const overlay=node('canvas',null,'pev-video-layer');
     overlay.setAttribute('aria-hidden','true');
     box.append(video,overlay,hud);
+    // Android's convention: telemetry elapsed ms = video position ms + videoSyncOffsetMs.
+    let offset=Number.isFinite(context.syncOffsetMs)?Math.round(context.syncOffsetMs):0;
+    function keepOffset(){
+      if(!context.onSyncOffset)return;
+      const value=Math.round(offset);
+      status.textContent='Saving video sync…';
+      Promise.resolve(context.onSyncOffset(value)).then(()=>{if(!destroyed)status.textContent='Video sync saved.';},
+        error=>{if(!destroyed)status.textContent=error.message||'Could not save the video sync.';});
+    }
     const align=button('Align selected moments',()=>{
       if(!Number.isFinite(video.duration))return;
-      offset=context.current()-video.currentTime*1000;
-      offsetField.value=String(Math.round(offset)/1000);
-      preview();
+      offset=Math.round(context.current()-video.currentTime*1000);
+      offsetField.value=String(offset/1000);
+      preview();keepOffset();
     });
     const offsetField=node('input');
-    offsetField.type='number';offsetField.step='0.001';offsetField.value='0';
+    offsetField.type='number';offsetField.step='0.001';offsetField.value=String(offset/1000);
     const offsetLabel=node('label','Ride time at video start (s)','tel-field');offsetLabel.append(offsetField);
     const controls=node('div',null,'pev-video-controls'), alignment=node('div',null,'tel-controls');
     alignment.append(offsetLabel,align);controls.append(alignment);
     let layout={version:1,widgets:[]};
-    let offset=0,recorder=null,frame=null,previewFrame=null,destroyed=false,playSync=false,preparing=false;
+    let recorder=null,frame=null,previewFrame=null,destroyed=false,playSync=false,preparing=false;
     // Following is optional so the rider can select matching moments independently.
     const follow=node('input');follow.type='checkbox';
     const followLabel=node('label',null,'tel-check');followLabel.append(follow,document.createTextNode('Follow video on the route'));
@@ -75,7 +84,8 @@ export function mountVideo(host,context){
       if(playSync)context.seek(t);
     }
     follow.onchange=()=>{playSync=follow.checked;preview();};
-    offsetField.oninput=()=>{offset=Number(offsetField.value)||0;preview();};
+    offsetField.oninput=()=>{offset=Math.round((Number(offsetField.value)||0)*1000);preview();};
+    offsetField.onchange=keepOffset;
     mountLayoutEditor(controls,{initial:context.layoutJson,onChange:value=>{layout=value;preview();}});
     const resize=new ResizeObserver(preview);resize.observe(video);
     function playPreview(){

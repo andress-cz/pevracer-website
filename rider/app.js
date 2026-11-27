@@ -1,14 +1,14 @@
 import {lapTable} from './lap-table.js';
 import {auth,client} from './api.js';
 import {sessionFilter} from './session-filter.js';
-import {el,eq,link,panel,button,formAt,field,submit,message,record,sessionEquipment,sessionBest,metrics,date,duration,km} from './ui.js';
+import {el,eq,link,panel,button,formAt,field,submit,message,record,sessionEquipment,sessionBest,sessionTitle,metrics,date,duration,km} from './ui.js';
 import {mountEvents} from './events.js';
 import {mountTrack,emptyTrack,trackFromRoute} from './track-editor.js';
 import {mountTelemetry,mountLocalAnalysis} from './telemetry.js';
 import {mountBackup} from './backup.js';
 import {mountCommunity,mountSharing,mountModeration,rules} from './community.js';
 import {createSatelliteMap,L} from './satellite-map.js';
-import {decodeRecording} from './telemetry-codec.js';
+import {decodeRecording,MAX_RECORDING_BYTES} from './telemetry-codec.js';
 import {heatmapPoints} from './heatmap-data.js';
 
 const view=document.querySelector('#view'),nav=document.querySelector('#areas'),signout=document.querySelector('#signout');
@@ -93,7 +93,7 @@ async function createTrack(host,ctx){
           id:eq(session.id),owner_id:eq(ctx.uid),updated_at:eq(session.updated_at),select:'id'
         },{
           track_id:row.id,track_local_id:row.local_id,laps:[],lap_count:0,best_lap_ms:null,
-          meta:{...session.meta,trackId:row.local_id,lapDirection:null}
+          meta:{...session.meta,trackId:row.local_id,lapDirection:null},content_hash:null
         },'return=representation');
         if(!updated.length)throw Error('The source session changed. Refresh it and try again.');
       }catch(error){
@@ -114,27 +114,27 @@ function browse(host,rows,kind){
     list.replaceChildren();const term=filter.value.trim().toLowerCase();
     for(const item of rows){
       if(options&&!options.matches(item))continue;
-      const title=item.title||item.name||date(item.started_at);
+      const title=kind==='session'?sessionTitle(item.displayName,item.started_at):item.name;
       const detail=kind==='session'?[date(item.started_at),sessionEquipment(item),item.lap_count+(item.lap_count===1?' lap':' laps')].join(' · '):item.visibility;
       if(!(title+' '+detail).toLowerCase().includes(term))continue;
       if(kind==='session'){
         record(list,title,detail,'#session/'+item.id,sessionBest(item));
       }else record(list,title,detail,'#track/'+item.id);
     }
-    if(!list.childElementCount)list.append(el('p',rows.length?'No matching '+kind+'s.':'Your cloud library is empty. On Android, open Social → Account → Back up now to bring your '+kind+'s here.','empty'));
+    if(!list.childElementCount)list.append(el('p',rows.length?'No matching '+kind+'s.':'Your cloud library is empty. Turn on cloud sync in the PEV Racer Android app to bring your '+kind+'s here.','empty'));
   }
   filter.oninput=draw;if(options)options.box.onchange=draw;draw();
 }
 async function library(host,ctx,kind){
   const sessions=kind==='session';host.append(el('h1',sessions?'My sessions':'My tracks'));
-  if(sessions)host.append(el('p','Rides backed up from Android appear here. To sync a ride from your phone, open Social → Account → Back up now.','quiet'));
+  if(sessions)host.append(el('p','Rides from the Android app appear here once your phone syncs. Edits made here sync back to the phone.','quiet'));
   host.append(link(sessions?'Analyze a local recording':'Create or import a track',sessions?'#files':'#newtrack','rbutton'));
-  const rows=await ctx.api.all(kind+'s',{select:sessions?brief+',track:tracks(name),meta->>raceboxName,meta->>eucName,meta->>lapDirection':'id,name,visibility',owner_id:eq(ctx.uid),order:sessions?'started_at.desc,id.asc':'name.asc,id.asc'});
+  const rows=await ctx.api.all(kind+'s',{select:sessions?brief+',track:tracks(name),meta->>raceboxName,meta->>eucName,meta->>lapDirection,meta->>displayName':'id,name,visibility',owner_id:eq(ctx.uid),order:sessions?'started_at.desc,id.asc':'name.asc,id.asc'});
   browse(host,rows,kind);
 }
 async function stats(host,ctx){
   host.append(el('h1','Rider stats'));
-  const [sessions,tracks]=await Promise.all([ctx.api.all('sessions',{owner_id:eq(ctx.uid),is_mine:eq(true),select:brief+',meta->endedAtEpochMs,meta->eucName',order:'started_at.desc,id.asc'}),ctx.api.all('tracks',{owner_id:eq(ctx.uid),select:'local_id,name',order:'id'})]);
+  const [sessions,tracks]=await Promise.all([ctx.api.all('sessions',{owner_id:eq(ctx.uid),is_mine:eq(true),select:brief+',meta->eucName',order:'started_at.desc,id.asc'}),ctx.api.all('tracks',{owner_id:eq(ctx.uid),select:'local_id,name',order:'id'})]);
   const trackNames=new Map(tracks.map(t=>[t.local_id,t.name]));
   const period=field(host,'Period','period','select',{choices:[['0','All time'],['30','Last 30 days'],['365','Last year']]});
   const vehicles=[...new Set(sessions.map(s=>s.eucName).filter(Boolean))];
@@ -160,7 +160,7 @@ async function stats(host,ctx){
       const filters=mode==='mine'
         ?{owner_id:eq(ctx.uid),is_mine:eq(true)}
         :{visibility:eq('public')};
-      const recordings=await ctx.api.all('sessions',{...filters,sample_path:'not.is.null',sample_bytes:'lte.52428800',select:'id,sample_path,sample_bytes'});
+      const recordings=await ctx.api.all('sessions',{...filters,sample_path:'not.is.null',sample_bytes:'lte.'+MAX_RECORDING_BYTES,select:'id,sample_path,sample_bytes'});
       if(request!==heatLoad)return;
       if(!recordings.length){heatStatus.textContent=mode==='mine'?'No recordings from your rides are available yet.':'No public recordings are available yet.';clearHeatmap();return;}
       const points=[];let done=0,failures=0;
@@ -212,12 +212,13 @@ async function stats(host,ctx){
   }
   function draw(){
     const since=period.value==='0'?-Infinity:Date.now()-Number(period.value)*86400000;
-    const rows=sessions.filter(r=>r.endedAtEpochMs!=null && Date.parse(r.started_at)>=since && (!vehicle.value||vehicle.value===r.eucName));
+    // Rides cut off by a crash count too. Their duration comes from the recording.
+    const rows=sessions.filter(r=>Date.parse(r.started_at)>=since && (!vehicle.value||vehicle.value===r.eucName));
     const sum=k=>rows.reduce((n,r)=>n+(r[k]||0),0);body.replaceChildren();
     metrics(body,[['Sessions',rows.length],['Distance',km(sum('distance_m'))],['Ride time',(sum('duration_ms')/3600000).toFixed(1)+' h'],['Top speed',rows.reduce((n,r)=>Math.max(n,r.max_speed_kmh||0),0).toFixed(1)+' km/h']]);
     const groups=new Map();for(const row of rows){const id=row.track_local_id||'';const group=groups.get(id)||{rides:0,distance:0,best:Infinity};group.rides++;group.distance+=row.distance_m||0;if(row.best_lap_ms)group.best=Math.min(group.best,row.best_lap_ms);groups.set(id,group);}
     const section=panel(body,'By track');
-    if(!groups.size)section.append(el('p','No finished rides match these filters.'));
+    if(!groups.size)section.append(el('p','No rides match these filters.'));
     for(const [id,g] of groups)section.append(el('p',(trackNames.get(id)||'Unlinked track')+' · '+g.rides+(g.rides===1?' ride · ':' rides · ')+km(g.distance)+(g.best<Infinity?' · Best '+duration(g.best):'')));
     body.append(heat);
   }
@@ -228,9 +229,13 @@ async function detail(host,ctx,type,id){
   const [row]=await api.rows(type+'s',{id:eq(id),select:type==='session'?'*,owner:profiles(username),linked:tracks(doc)':'*,owner:profiles(username)'});
   if(!row)throw Error('This item is private, unavailable, or has been removed.');
   const mine=row.owner_id===uid;
-  host.append(link('All '+type+'s','#'+type+'s'),el('h1',row.title||row.name||date(row.started_at)),el('p',(row.owner?.username||'Rider')+' · '+row.visibility+(row.started_at?' · '+date(row.started_at):'')));
+  const autoTitle=type==='session'&&!row.meta?.displayName?.trim();
+  const shownTitle=type==='session'?(mine||!row.title?sessionTitle(row.meta?.displayName,row.started_at):row.title):row.name;
+  host.append(link('All '+type+'s','#'+type+'s'),el('h1',shownTitle),el('p',(row.owner?.username||'Rider')+' · '+row.visibility+(row.started_at?' · '+date(row.started_at):'')));
+  // Clearing content_hash tells the phone that the cloud copy changed. Visibility is not synced content.
   async function savePatch(patch){
-    const updated=await api.write(type+'s','PATCH',{id:eq(id),owner_id:eq(uid),updated_at:eq(row.updated_at),select:'updated_at' },patch,'return=representation');
+    const body=Object.keys(patch).every(key=>key==='visibility')?patch:{...patch,content_hash:null};
+    const updated=await api.write(type+'s','PATCH',{id:eq(id),owner_id:eq(uid),updated_at:eq(row.updated_at),select:'updated_at' },body,'return=representation');
     if(!updated.length)throw Error('This item changed elsewhere. Refresh before saving.'); Object.assign(row,patch,updated[0]);
   }
   if(type==='track'){
@@ -250,7 +255,9 @@ async function detail(host,ctx,type,id){
   }else{
     metrics(host,[['Distance',km(row.distance_m)],['Top speed',row.max_speed_kmh==null?'—':row.max_speed_kmh.toFixed(1)+' km/h'],['Laps',row.lap_count],['Best lap',duration(row.best_lap_ms)]]);
     if(row.track_id)host.append(link('Open linked track','#track/'+row.track_id));
-    mountTelemetry(panel(host),{session:{...row,track_doc:row.linked?.doc},loadRecording:()=>api.download(row.sample_path),onCreateTrack:(points,name)=>makeDraft(points,name,mine?row:null),
+    let offsetSave=Promise.resolve();
+    mountTelemetry(panel(host),{session:{...row,title:shownTitle,track_doc:row.linked?.doc},loadRecording:()=>api.download(row.sample_path),onCreateTrack:(points,name)=>makeDraft(points,name,mine?row:null),
+      onSaveVideoOffset:mine?offset=>offsetSave=offsetSave.catch(()=>{}).then(()=>row.meta?.videoSyncOffsetMs===offset?null:savePatch({meta:{...row.meta,videoSyncOffsetMs:offset}})):undefined,
       loadTracks:()=>api.all('tracks',{owner_id:eq(uid),select:'id,local_id,name,doc',order:'name.asc,id.asc'}),
       onSaveTiming:mine?async({track,laps,lapDirection,best_lap_ms,lap_count})=>{
         if(row.track_local_id!==track.local_id){
@@ -277,8 +284,8 @@ async function detail(host,ctx,type,id){
       box.append(lapTable(laps,{caption:'Session lap times',after}));
     }
     if(mine){
-      const f=formAt(panel(host,'Session details','Changes apply to the cloud copy. A later Android backup of an edited ride can replace them.'));
-      field(f,'Title','title','text',{required:true,maxLength:160,value:row.title||''});
+      const f=formAt(panel(host,'Session details','Changes sync to your phone. If the ride is also edited on the phone, the later edit wins.'));
+      field(f,'Title','title','text',{maxLength:160,value:row.meta?.displayName||'',placeholder:sessionTitle(null,row.started_at)});
       field(f,'Notes','notes','text',{value:row.meta?.notes||'',maxLength:10000});
       field(f,'Ride ownership','ownership','select',{choices:[['mine','I recorded this ride'],['other','Another rider recorded it']],value:row.is_mine?'mine':'other'});
       submit(f,'Save session details',async({title,notes,ownership})=>{
@@ -288,7 +295,10 @@ async function detail(host,ctx,type,id){
           const [entries,grants,links]=await Promise.all([api.rows('event_entries',{session_id:eq(id),user_id:eq(uid),select:'event_id',limit:1}),api.rows('grants',filter),api.rows('share_links',filter)]);
           if(row.visibility!=='private'||entries.length||grants.length||links.length)throw Error('Make this session private, remove grants and invitation links, and withdraw event entries before changing ownership.');
         }
-        await savePatch({title,is_mine:isMine,meta:{...row.meta,isMine,displayName:title,notes}});render();
+        // Like Android, a blank or date-style title stays automatic (displayName null).
+        const name=title.trim(),automatic=!name||name===sessionTitle(null,row.started_at)||autoTitle&&name===row.title;
+        const displayName=automatic?null:name;
+        await savePatch({title:displayName??(autoTitle&&row.title?row.title:sessionTitle(null,row.started_at)),is_mine:isMine,meta:{...row.meta,isMine,displayName,notes}});render();
       });
       if(row.track_local_id)button(host,'Unlink track',async()=>{
         if(!confirm('Unlink the track and remove its calculated laps from this session?'))return;

@@ -13,6 +13,17 @@ function nearLongitude(lon,reference) {
 function validPoint(lat,lon){
   return Number.isFinite(lat)&&Math.abs(lat)<=90&&Number.isFinite(lon)&&Math.abs(lon)<=180;
 }
+// Point `metres` away from lat/lon along `bearing` degrees, in local flat metres.
+function offset(lat,lon,bearing,metres){
+  const b=bearing*radians;
+  return [lat+Math.cos(b)*metres/metersPerDegree,lon+Math.sin(b)*metres/(metersPerDegree*Math.max(.0001,Math.cos(lat*radians)))];
+}
+/** Shaft from the gate centre along its travel bearing, with an arrowhead: [[tip, base], [left, tip, right]]. */
+export function directionArrow(lat,lon,bearing,halfWidth){
+  const length=Math.max(6,Math.min(40,halfWidth*.9)),head=length*.4;
+  const tip=offset(lat,lon,bearing,length);
+  return [[[lat,lon],tip],[offset(tip[0],tip[1],bearing+150,head),tip,offset(tip[0],tip[1],bearing-150,head)]];
+}
 function drawGates(group,doc,{selected,longitude,onSelect}={}){
   group.clearLayers();
   const bounds=L.latLngBounds([]);
@@ -32,6 +43,11 @@ function drawGates(group,doc,{selected,longitude,onSelect}={}){
     const opt={interactive:!!onSelect,bubblingMouseEvents:false,opacity:1};
     L.polyline(ends,{color:'#0d211b',weight:7,interactive:false}).addTo(group);
     const gateLine=L.polyline(ends,{...opt,color,weight:3}).addTo(group);
+    // Arrow in the direction a rider must cross the gate (laps ridden the other way round
+    // cross every gate reversed and still time).
+    const arrow=directionArrow(gate.lat,lon,gate.bearing??0,halfWidth);
+    L.polyline(arrow,{color:'#0d211b',weight:6,interactive:false,lineCap:'round',lineJoin:'round'}).addTo(group);
+    L.polyline(arrow,{color,weight:2.5,interactive:false,lineCap:'round',lineJoin:'round'}).addTo(group);
     const dot=L.circleMarker(center,{...opt,radius:gate.key===selected?6:4,color:'#10201b',
       weight:2,fillColor:color,fillOpacity:1}).addTo(group);
     const label=document.createElement('span');

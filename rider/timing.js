@@ -1,5 +1,6 @@
 import {lapTable,lapLabel} from './lap-table.js';
 import {coordinate,gpsDistance} from './telemetry-codec.js';
+import {halfWidth} from './track-gates.js';
 
 const rad=Math.PI/180, earth=6371000;
 function endpoint(center,width,heading) {
@@ -79,10 +80,21 @@ function direction(points,a,b) {
   area*=111320**2*Math.max(.000001,Math.cos(lat*rad));
   return Math.abs(area)<100?null:area>0?'CCW':'CW';
 }
-function majority(laps) {
+// LapAnalyzer.directionFromIndexed: a tie is undecided.
+function vote(dirs) {
   let count=0;
-  for(const lap of laps){if(lap.direction==='CW')count++;else if(lap.direction==='CCW')count--;}
+  for(const d of dirs){if(d==='CW')count++;else if(d==='CCW')count--;}
   return count>0?'CW':count<0?'CCW':null;
+}
+// LapAnalyzer.majorityDirection: a tie keeps the first lap's direction.
+function majority(laps) {
+  return vote(laps.map(l=>l.direction)) ?? laps.find(l=>l.direction)?.direction ?? null;
+}
+// SessionAnalysisService.persistDirection. Android splits a two-direction ride into one session
+// per direction; the web cannot, so it keeps the "BOTH" Android stores when a split can't be saved.
+export function sessionDirection(laps,fallback) {
+  const dirs=new Set(laps.filter(l=>!l.incomplete&&!l.outLap).map(l=>l.direction).filter(Boolean));
+  return dirs.size>1?'BOTH':dirs.size?[...dirs][0]:fallback??null;
 }
 export function analyzeTrack(data,session,track) {
   const doc=track.doc, points=samplesWithLocation(data), sessionId=session.local_id;
@@ -90,13 +102,16 @@ export function analyzeTrack(data,session,track) {
   const isCircuit=doc.mode==='CIRCUIT';
   if(!isCircuit && doc.mode!=='POINT_TO_POINT')throw Error('Unrecognized track mode.');
   const trackId=track.local_id||doc.id;
-  const existing=new Map((session.track_local_id===trackId?session.laps??[]:[]).map(l=>[l.startSampleIndex+':'+!!l.outLap+':'+!!l.incomplete,l]));
+  // Another track starts with every lap visible. The same track keeps hidden laps by start sample, as Android does.
+  const previous=session.track_local_id===trackId?session.laps??[]:[];
+  const existing=new Map(previous.map(l=>[l.startSampleIndex+':'+!!l.outLap+':'+!!l.incomplete,l]));
+  const hiddenStarts=new Set(previous.filter(l=>l.hidden).map(l=>l.startSampleIndex));
   function lapFrom(start,end,number,sectors,dir,incomplete=false,outLap=false) {
     const original=existing.get(start.index+':'+outLap+':'+incomplete);
     return {id:original?.id??crypto.randomUUID(),sessionId,trackId,lapNumber:number,
       startNanos:Number(start.ns),endNanos:Number(end.ns),startSampleIndex:start.index,endSampleIndex:end.index,
       durationMs:incomplete?null:Number((end.ns-start.ns)/1000000n),sectorTimesJson:JSON.stringify(sectors),
-      direction:dir,incomplete,outLap,hidden:original?.hidden===true};
+      direction:dir,incomplete,outLap,hidden:hiddenStarts.has(start.index)};
   }
   function withEdges(runs,start,end) {
     if(!start || !end)return runs;
@@ -108,14 +123,14 @@ export function analyzeTrack(data,session,track) {
   }
   function passes(reverse) {
     const flip=reverse?180:0, bearing=doc.startFinishBearingDeg;
-    const startGate=gate(doc.startFinishLat,doc.startFinishLon,bearing+flip,doc.gateHalfWidthM??15);
+    const startGate=gate(doc.startFinishLat,doc.startFinishLon,bearing+flip,halfWidth(doc.gateHalfWidthM));
     const starts=findCrossings(points,startGate,true);
     if(!starts.length)return {runs:[],laps:[],dir:null,score:0};
     const specs=(doc.sectors??[]).filter(s=>s.index>0).sort((a,b)=>a.index-b.index);
     if(reverse)specs.reverse();
-    const gates=specs.map(s=>findCrossings(points,gate(s.entryLat,s.entryLon,(s.bearingDeg??bearing)+flip,s.halfWidthM??15),false));
-    const finishes=isCircuit?starts:findCrossings(points,gate(doc.finishLat,doc.finishLon,doc.finishBearingDeg??bearing,doc.finishHalfWidthM??doc.gateHalfWidthM??15),true);
-    const runs=[];
+    const gates=specs.map(s=>findCrossings(points,gate(s.entryLat,s.entryLon,(s.bearingDeg??bearing)+flip,halfWidth(s.halfWidthM)),false));
+    const finishes=isCircuit?starts:findCrossings(points,gate(doc.finishLat,doc.finishLon,doc.finishBearingDeg??bearing,halfWidth(doc.finishHalfWidthM,halfWidth(doc.gateHalfWidthM))),true);
+    const runs=[],dirs=[];
     let hits=0;
     for(let i=0;i<starts.length;i++) {
       const start=starts[i],finish=isCircuit?starts[i+1]:after(finishes,start.pos);
@@ -123,19 +138,20 @@ export function analyzeTrack(data,session,track) {
       if(!isCircuit && starts[i+1] && starts[i+1].pos<finish.pos)continue;
       if(finish.ns<=start.ns)continue;
       const secs=sectorsBetween(gates,start,finish);
-      const dir=direction(points,Math.floor(start.pos),Math.floor(finish.pos));
+      dirs.push(direction(points,Math.floor(start.pos),Math.floor(finish.pos)));
       hits+=secs.filter(n=>n>0).length;
-      runs.push(lapFrom(start,finish,runs.length+1,secs,dir));
+      runs.push(lapFrom(start,finish,runs.length+1,secs,null));
     }
-    const dir=majority(runs);
     const laps=isCircuit?withEdges(runs,starts[0],starts.at(-1)):runs;
-    return {runs,laps,dir,score:runs.length*1000+hits};
+    return {runs,laps,dir:vote(dirs),score:runs.length*1000+hits};
   }
+  // LapAnalyzer.analyze: every lap carries its orientation's direction, else the whole ride's.
   const forward=passes(false);
-  let laps=forward.laps;
+  let laps=forward.laps,dir=forward.dir,mixed=false;
   if(isCircuit) {
     const reverse=passes(true);
     if(forward.dir && reverse.dir && forward.dir!==reverse.dir){
+      for(const pass of [forward,reverse])for(const l of pass.runs)l.direction=pass.dir;
       const merged=[];
       const score=l=>JSON.parse(l.sectorTimesJson).filter(v=>v>0).length;
       for(const l of [...forward.runs,...reverse.runs].sort((a,b)=>a.startSampleIndex-b.startSampleIndex)){
@@ -146,12 +162,14 @@ export function analyzeTrack(data,session,track) {
       merged.sort((a,b)=>a.startSampleIndex-b.startSampleIndex).forEach((l,i)=>l.lapNumber=i+1);
       const a=merged[0],b=merged.at(-1);
       laps=withEdges(merged,{index:a.startSampleIndex,ns:BigInt(a.startNanos)},{index:b.endSampleIndex,ns:BigInt(b.endNanos)});
-    } else if(reverse.score>forward.score)laps=reverse.laps;
+      dir=majority(merged);mixed=true;
+    } else if(reverse.score>forward.score){laps=reverse.laps;dir=reverse.dir;}
   }
-  const complete=laps.filter(l=>!l.incomplete);
-  const dir=majority(complete) ?? (points.length?direction(points,0,points.length-1):null);
-  for(const l of laps)l.direction??=dir;
-  return timingSummary(track,laps,dir);
+  if(!mixed){
+    dir??=direction(points,0,points.length-1);
+    for(const l of laps)l.direction=dir;
+  }
+  return timingSummary(track,laps,sessionDirection(laps,dir));
 }
 function timingSummary(track,laps,lapDirection) {
   const visible=laps.filter(l=>!l.hidden);

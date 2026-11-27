@@ -1,4 +1,4 @@
-import {lapOption,sectorTimes} from './lap-table.js';
+import {directionGroups,idealLap,lapOption,sectorTimes} from './lap-table.js';
 import {createTelemetryChart} from './telemetry-chart.js';
 import {coordinate, decodeRecording, elapsedMs, exportRecording, gpsDistance, speed} from './telemetry-codec.js';
 import {mountVideo} from './telemetry-video.js';
@@ -91,7 +91,7 @@ function nearest(times,time,lo=0,hi=times.length-1) {
   }
   return lo;
 }
-function render(container,data,blob,session,name,onCreateTrack,loadComparisons,loadTracks,onSaveTiming) {
+function render(container,data,blob,session,name,onCreateTrack,loadComparisons,loadTracks,onSaveTiming,onSaveVideoOffset) {
   const summary=prepare(data), {times,dist}=summary, last=data.count-1;
   const root=el('section',null,'tel-view');
   const overview=el('div',null,'tel-stats');
@@ -106,23 +106,12 @@ function render(container,data,blob,session,name,onCreateTrack,loadComparisons,l
   if(timedLaps.length){
     const best=timedLaps.reduce((a,b)=>a.durationMs<=b.durationMs?a:b);
     stat('Best lap',clock(best.durationMs,true));
-    // Sector numbering differs across directions and gate layouts.
-    const groups=new Map();
-    for(const l of timedLaps){
-      const sectors=sectorTimes(l);
-      if(!sectors.length)continue;
-      const key=[l.direction??'',sectors.length].join('/');
-      if(!groups.has(key))groups.set(key,[]);
-      groups.get(key).push(sectors);
-    }
-    for(const [dir,entries] of groups){
-      const fastest=Array(entries[0].length).fill(Infinity);
-      for(const sectors of entries)sectors.forEach((v,i)=>{if(v>0)fastest[i]=Math.min(fastest[i],v);});
-      if(fastest.every(Number.isFinite) && entries.length>1){
-        const [direction,count]=dir.split('/');
-        stat('Ideal lap'+(groups.size>1?' · '+[direction,count+' sectors'].filter(Boolean).join(' · '):''),clock(fastest.reduce((a,b)=>a+b),true));
-      }
-    }
+  }
+  // As on Android, a session ridden both ways gets one ideal lap per direction.
+  const directions=directionGroups((session?.laps??[]).filter(l=>!l.hidden));
+  for(const [direction,group] of directions){
+    const ideal=idealLap(group);
+    if(ideal)stat('Ideal lap'+(directions.size>1?' · '+(direction||'Laps'):''),clock(ideal.totalMs,true));
   }
   const map=el('div',null,'tel-route-map');
   map.setAttribute('role','region');map.setAttribute('aria-label','Ride route on the satellite map');
@@ -340,11 +329,12 @@ function render(container,data,blob,session,name,onCreateTrack,loadComparisons,l
   }
   mountVideo(video,{
     data,times,laps:session?.laps ?? [],layoutJson:session?.meta?.videoOverlayLayoutJson,name:stem, current:()=>times[selectedIndex],
+    syncOffsetMs:session?.meta?.videoSyncOffsetMs,onSyncOffset:onSaveVideoOffset,
     seek:t=>{if(lap.select.value!==''){lap.select.value='';chooseScope();}stop();setSample(nearest(times,t));}
   });
 }
 
-export function mountTelemetry(container,{session,loadRecording,onCreateTrack,loadComparisons,loadTracks,onSaveTiming}) {
+export function mountTelemetry(container,{session,loadRecording,onCreateTrack,loadComparisons,loadTracks,onSaveTiming,onSaveVideoOffset}) {
   const area=el('section',null,'tel-module');
   area.append(el('h3','Telemetry replay'));
   const status=el('p'); status.setAttribute('role','status');
@@ -357,7 +347,7 @@ export function mountTelemetry(container,{session,loadRecording,onCreateTrack,lo
       if(!area.isConnected)return;
       const data=await decodeRecording(blob);
       if(!area.isConnected)return;
-      render(view,data,blob,session,session.title||'ride',onCreateTrack,loadComparisons,loadTracks,onSaveTiming);
+      render(view,data,blob,session,session.title||'ride',onCreateTrack,loadComparisons,loadTracks,onSaveTiming,onSaveVideoOffset);
       status.textContent='';
     }catch(error){
       status.textContent=error.message || 'Unable to open recording.';

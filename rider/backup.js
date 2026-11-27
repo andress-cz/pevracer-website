@@ -1,8 +1,9 @@
 import {openZip, writeZip} from './backup-zip.js';
-import {coordinate, decodeRecording, elapsedMs, gpsDistance, speed} from './telemetry-codec.js';
+import {coordinate, decodeRecording, elapsedMs, gpsDistance, speed, MAX_RECORDING_BYTES as recordingLimit} from './telemetry-codec.js';
+import {sessionTitle} from './ui.js';
 
 const MiB = 1024 * 1024;
-const recordingLimit = 50 * MiB, manifestLimit = 16 * MiB;
+const manifestLimit = 16 * MiB;
 const safeId = /^[A-Za-z0-9_-]{1,128}$/;
 const noProgress = () => {};
 function requireValue(condition, message) {
@@ -89,8 +90,9 @@ export async function exportBackup(api, uid, progress = noProgress) {
   for (const row of sessions) {
     requireValue(row.meta && row.sample_path?.startsWith(uid+'/'),'Session metadata or recording missing from your cloud library.');
     const meta=fields(row.meta,sessionFields), trackId=ownedTrackIds.has(row.track_local_id) ? row.track_local_id : null;
+    // The title column always holds a name; only meta.displayName says whether the rider chose it.
     manifest.sessions.push({...meta,id:row.local_id,sampleFileName:row.local_id+'.pevr.gz',trackId,isMine:row.is_mine,
-      ownerUserId:uid,displayName:row.title ?? meta.displayName ?? null});
+      ownerUserId:uid,displayName:meta.displayName ?? null});
     if (trackId) {
       for (const lap of row.laps ?? []) manifest.laps.push({...fields(lap,lapFields),sessionId:row.local_id,trackId});
     } else if (row.track_local_id || row.laps?.length) unlinked++;
@@ -176,7 +178,7 @@ export async function restoreBackup(file,api,uid,progress=noProgress) {
     const fileName=session.id+'.pevr.gz', path=uid+'/'+crypto.randomUUID()+'.pevr.gz';
     const meta={...fields(session,sessionFields),id:session.id,ownerUserId:uid,sampleFileName:fileName};
     const payload={owner_id:uid,local_id:session.id,track_id:track?.id ?? null,track_local_id:session.trackId ?? null,
-      title:session.displayName || new Date(session.startedAtEpochMs).toLocaleString(),started_at:new Date(session.startedAtEpochMs).toISOString(),
+      title:sessionTitle(session.displayName,session.startedAtEpochMs),started_at:new Date(session.startedAtEpochMs).toISOString(),
       meta,laps:sessionLaps,lap_count:sessionLaps.filter(l=>!l.hidden).length,best_lap_ms:Number.isFinite(bestLap)?bestLap:null,
       is_mine:session.isMine ?? true,visibility:'private',sample_path:path,sample_bytes:blob.size,sample_sha256:await digest(blob),...stats.get(session.id)};
     await api.upload(path,blob);

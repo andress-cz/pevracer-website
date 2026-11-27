@@ -1,5 +1,15 @@
 import {el,field} from './ui.js';
 
+// SessionListFilters.direction: CW/CCW use LapDirection.storageIncludes (BOTH counts for
+// either, case-insensitive); Unknown is only a session without a stored direction.
+export function directionMatches(stored,wanted){
+  if(!wanted)return true;
+  if(wanted==='unknown')return stored==null;
+  if(stored==null)return false;
+  const value=String(stored).toUpperCase();
+  return value==='BOTH'||value===wanted;
+}
+
 export function sessionFilter(host,rows){
   const box=el('details',null,'panel');box.append(el('summary','Filter sessions'));host.append(box);
   const fields=el('div',null,'cols');box.append(fields);
@@ -18,11 +28,10 @@ export function sessionFilter(host,rows){
     if(date.value==='year')from=new Date(now.getFullYear(),0,1).getTime();
     else if(date.value==='today')from=new Date(now.getFullYear(),now.getMonth(),now.getDate()).getTime();
     else if(date.value)from=Date.now()-Number(date.value)*86400000;
-    const value=row.lapDirection||'unknown';
     return (!track.value||(row.track_local_id||'none')===track.value) &&
       (!owner.value||(owner.value==='mine')===row.is_mine) &&
       Date.parse(row.started_at)>=from &&
-      (!direction.value||direction.value===value||(value==='BOTH'&&direction.value!=='unknown')) &&
+      directionMatches(row.lapDirection,direction.value) &&
       (!vehicle.value||vehicle.value===row.eucName) && (!logger.value||logger.value===row.raceboxName);
   }
   return {box,matches};

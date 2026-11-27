@@ -8,6 +8,34 @@ export function sectorTimes(lap) {
   } catch { return []; }
 }
 
+// LapAnalyzer.idealLap: best known sector times over visible timed laps of one direction,
+// using the most common sector count (ties prefer more sectors). One lap is enough.
+export function idealLap(laps) {
+  const candidates = laps.filter(l => !l.incomplete && !l.outLap && !l.hidden && sectorTimes(l).length);
+  if (!candidates.length || new Set(candidates.map(l => l.direction).filter(Boolean)).size > 1) return null;
+  const counts = new Map();
+  for (const l of candidates) counts.set(sectorTimes(l).length, (counts.get(sectorTimes(l).length) ?? 0) + 1);
+  const size = [...counts].reduce((a,b) => b[1] > a[1] || b[1] === a[1] && b[0] > a[0] ? b : a)[0];
+  const best = Array(size).fill(Infinity), sources = Array(size).fill(null);
+  for (const l of candidates) {
+    const values = sectorTimes(l);
+    if (values.length !== size) continue;
+    values.forEach((t, i) => { if (t >= 1 && t < best[i]) { best[i] = t; sources[i] = l; } });
+  }
+  if (!best.every(Number.isFinite)) return null;
+  return {sectorTimesMs:best, totalMs:best.reduce((a,b) => a+b, 0), sourceLapNumbers:sources.map(l => l.lapNumber)};
+}
+// Android's groupLapsByDirection: first-seen direction first, laps without one form their own group.
+export function directionGroups(laps) {
+  const groups = new Map();
+  for (const lap of laps) {
+    const key = lap.direction ?? null;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(lap);
+  }
+  return groups;
+}
+
 export function lapLabel(lap) {
   if (lap.outLap) return 'Out lap';
   return 'Lap '+lap.lapNumber+(lap.incomplete ? ' (incomplete)' : '');
