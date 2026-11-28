@@ -66,54 +66,202 @@ export function routeGateBearing(route, doc, lat, lon) {
   return Number(bearing.toFixed(1));
 }
 
-// The interchange stores gate geometry and track bounds, while the route stays in the recording.
+// Same constants and steps as Android's TrackBuilder, so both build the same gates from a ride.
+const DEPART_M=40, RETURN_M=12, REVISIT_M=25, NEAR_START_M=30, MIN_TRACK_M=50, MAX_SECTORS=100;
+const MAX_CANDIDATES=400, MIN_CANDIDATE_STEP_M=5, TURN_WINDOW_M=25, NEIGHBOUR_M=25, SAME_STRETCH_M=60, MIN_SECTOR_M=30;
+
+// The route from index `from`: a circuit lap ends when it comes back within 12 m of where it
+// started, after leaving by 40 m; otherwise it runs to index `to`.
+function lapFrom(path, from, circuit, to=path.length-1) {
+  const first=path[from];
+  let departed=false;
+  for (let i=from+1;i<=to;i++) {
+    const d=leg(first,path[i]).distance;
+    if (circuit && departed && d<RETURN_M) return {points:path.slice(from,i+1), closed:true};
+    if (d>DEPART_M) departed=true;
+  }
+  return {points:path.slice(from,to+1), closed:false};
+}
+
+// The spot the route passes most often: where a lap most likely starts.
+function busiestIndex(path) {
+  const step=Math.max(1,Math.floor(path.length/80));
+  let best=0, bestScore=-1;
+  for (let i=0;i<path.length;i+=step) {
+    let score=0;
+    for (let j=i+20;j<path.length;j+=step) if (leg(path[i],path[j]).distance<REVISIT_M) score++;
+    if (score>bestScore) {bestScore=score;best=i;}
+  }
+  return best;
+}
+
+// The first pass by the start gate (from which a circuit lap closes), or -1.
+function lapStart(path, start, circuit) {
+  const d=path.map(p=>leg(start,p).distance);
+  let nearest=-1, nearestD=Infinity;
+  for (let i=0;i<path.length;i++) {
+    if (d[i]<nearestD) {nearestD=d[i];nearest=i;}
+    const closest=d[i]<=NEAR_START_M && (i===0 || d[i-1]>d[i]) && (i===path.length-1 || d[i+1]>=d[i]);
+    if (closest && (!circuit || lapFrom(path,i,true).closed)) return i;
+  }
+  return nearestD<=NEAR_START_M ? nearest : -1;
+}
+
+function nearestIndex(path, target, from=0) {
+  let best=Math.min(from,path.length-1), bestD=Infinity;
+  for (let i=from;i<path.length;i++) {
+    const d=leg(target,path[i]).distance;
+    if (d<bestD) {bestD=d;best=i;}
+  }
+  return best;
+}
+
+// Positions by distance along a path, with the travel bearing there.
+function along(path) {
+  const lengths=[0];
+  for (let i=1;i<path.length;i++) lengths.push(lengths[i-1]+leg(path[i-1],path[i]).distance);
+  const last=path.length-1;
+  return {distance:lengths[last], at(meters) {
+    let i=1;
+    while (i<last && (lengths[i]<meters || lengths[i]===lengths[i-1])) i++;
+    const a=path[i-1], b=path[i], section=leg(a,b);
+    const t=section.distance>0 ? Math.max(0,Math.min(1,(meters-lengths[i-1])/section.distance)) : 0;
+    return {lat:a.lat+(b.lat-a.lat)*t, lon:((a.lon+section.lonDelta*t+540)%360)-180, bearing:section.bearing};
+  }};
+}
+
+/**
+ * Where sectors 2..n start, in metres along the lap. Lines go where a rider crosses them
+ * cleanly: on straight stretches rather than in corners, and away from other parts of the lap
+ * that pass close by (they would trigger the gate too). Sectors stay roughly equal in length;
+ * a line moves off the even split only to find a better spot. Each candidate line costs its
+ * turning (degrees over ±25 m) plus a penalty near other parts of the lap, each sector its
+ * squared deviation from an equal share, and dynamic programming picks the cheapest set. With
+ * no set that fits, the sectors are spaced evenly. Same as Android's TrackBuilder.sectorBreaks.
+ */
+function sectorBreaks(route, sectorCount, circuit) {
+  if (sectorCount<2) return [];
+  const total=route.distance;
+  const even=[];for (let i=1;i<sectorCount;i++) even.push(total*i/sectorCount);
+  const step=Math.max(MIN_CANDIDATE_STEP_M,total/MAX_CANDIDATES);
+  const count=Math.trunc(total/step);
+  if (count<2) return even;
+  const dist=[], points=[];
+  for (let k=0;k<=count;k++) {dist.push(k*step);points.push(route.at(k*step));}
+  const cost=dist.map((d,k)=>{
+    const back=route.at(Math.max(0,d-TURN_WINDOW_M)), ahead=route.at(Math.min(total,d+TURN_WINDOW_M));
+    const turn=angleBetween(leg(back,points[k]).bearing,leg(points[k],ahead).bearing);
+    let crowded=false;
+    for (let j=0;j<=count;j++) {
+      let apart=Math.abs(dist[j]-d);
+      if (circuit) apart=Math.min(apart,total-apart);
+      if (apart>SAME_STRETCH_M && leg(points[k],points[j]).distance<NEIGHBOUR_M) {crowded=true;break;}
+    }
+    return Math.min(turn,90)/30+(crowded?3:0);
+  });
+  const ideal=total/sectorCount, minLength=Math.max(0.35*ideal,MIN_SECTOR_M), maxLength=1.9*ideal;
+  const lengthCost=length=>{
+    if (length<minLength || length>maxLength) return Infinity;
+    const off=(length-ideal)/ideal;
+    return 4*off*off;
+  };
+  const lines=sectorCount-1;
+  const best=Array.from({length:lines},()=>new Array(count+1).fill(Infinity));
+  const from=Array.from({length:lines},()=>new Array(count+1).fill(-1));
+  for (let k=1;k<count;k++) best[0][k]=lengthCost(dist[k])+cost[k];
+  for (let m=1;m<lines;m++) for (let k=1;k<count;k++) for (let i=1;i<k;i++) {
+    const prev=best[m-1][i];
+    if (prev===Infinity) continue;
+    const c=prev+lengthCost(dist[k]-dist[i])+cost[k];
+    if (c<best[m][k]) {best[m][k]=c;from[m][k]=i;}
+  }
+  let end=-1, endCost=Infinity;
+  for (let k=1;k<count;k++) {
+    const c=best[lines-1][k]+lengthCost(total-dist[k]);
+    if (c<endCost) {endCost=c;end=k;}
+  }
+  if (end<0) return even;
+  const picked=[];
+  for (let m=lines-1,k=end;m>=0;m--) {picked.push(dist[k]);k=from[m][k];}
+  return picked.reverse();
+}
+
+function checkSectorCount(sectorCount) {
+  if (!Number.isInteger(sectorCount) || sectorCount<1 || sectorCount>MAX_SECTORS) throw Error('Use 1 to 100 sectors.');
+}
+
+/**
+ * A circuit starts where the route first closes a lap (or, if it never comes back to its first
+ * point, at its most revisited spot) and gets `sectorCount` sectors along that one lap, divided
+ * as sectorBreaks describes. Point to point runs from the first to the last position. The interchange stores gate
+ * geometry and track bounds, while the route stays in the recording.
+ */
 export function trackFromRoute(points, {name = 'New track', mode = 'CIRCUIT', sectorCount = 3} = {}) {
   const path = points.filter(p => p && validPosition(p.lat, p.lon));
   if (path.length < 10) throw Error('A track needs at least ten GPS positions.');
-  if (!Number.isInteger(sectorCount) || sectorCount < 1 || sectorCount > 100) throw Error('Use 1 to 100 sectors.');
+  checkSectorCount(sectorCount);
   if (!['CIRCUIT','POINT_TO_POINT'].includes(mode)) throw Error('Choose a valid track type.');
-  const first = path[0];
-  const lengths = [0];
-  let departed = false;
-  for (let i=1; i<path.length; i++) {
-    lengths.push(lengths[i-1] + leg(path[i-1], path[i]).distance);
-    const fromStart = leg(first, path[i]).distance;
-    if (mode === 'CIRCUIT' && departed && fromStart < 12) break;
-    if (fromStart > 40) departed = true;
-  }
-  const last = lengths.length - 1;
-  const distance = lengths[last];
-  if (distance < 50) throw Error('A track needs at least 50 m of GPS data.');
-  let cursor = 1;
-  function atMeters(meters) {
-    while (cursor < last && (lengths[cursor] < meters || lengths[cursor] === lengths[cursor-1])) cursor++;
-    const a = path[cursor-1], b = path[cursor], section = leg(a,b);
-    const t = section.distance > 0 ? (meters-lengths[cursor-1])/section.distance : 0;
-    return {lat: a.lat + (b.lat-a.lat)*t, lon: ((a.lon + section.lonDelta*t + 540) % 360) - 180,
-      bearing: section.bearing};
-  }
+  const circuit = mode === 'CIRCUIT';
+  const from = circuit && !lapFrom(path,0,true).closed ? busiestIndex(path) : 0;
+  const lap = lapFrom(path,from,circuit).points;
+  const route = along(lap);
+  if (route.distance < MIN_TRACK_M) throw Error('A track needs at least 50 m of GPS data.');
   const doc = emptyTrack();
   doc.mode = mode;
   doc.name = name;
-  for (let i=0;i<sectorCount;i++) {
-    const p = atMeters(distance * i / sectorCount);
+  for (const [i,meters] of [0,...sectorBreaks(route,sectorCount,circuit)].entries()) {
+    const p = route.at(meters);
     doc.sectors.push({index:i, name:'S'+(i+1), entryLat:p.lat, entryLon:p.lon, bearingDeg:p.bearing, halfWidthM:15});
   }
+  const first = lap[0], last = lap[lap.length-1];
   doc.startFinishLat = first.lat; doc.startFinishLon = first.lon;
   doc.startFinishBearingDeg = doc.sectors[0].bearingDeg;
-  if (mode === 'POINT_TO_POINT') {
-    const finish = atMeters(distance);
-    doc.finishLat = path[last].lat; doc.finishLon = path[last].lon;
-    doc.finishBearingDeg = finish.bearing; doc.finishHalfWidthM = 15;
+  if (!circuit) {
+    doc.finishLat = last.lat; doc.finishLon = last.lon;
+    doc.finishBearingDeg = route.at(route.distance).bearing; doc.finishHalfWidthM = 15;
   }
   doc.minLat = doc.maxLat = first.lat;
   doc.minLon = doc.maxLon = first.lon;
-  for (let i=1; i<=last; i++) {
-    const p = path[i];
+  for (const p of lap) {
     doc.minLat = Math.min(doc.minLat,p.lat); doc.maxLat = Math.max(doc.maxLat,p.lat);
     doc.minLon = Math.min(doc.minLon,p.lon); doc.maxLon = Math.max(doc.maxLon,p.lon);
   }
   return exportDoc(doc);
+}
+
+/**
+ * New sector list for `doc`: `sectorCount` sectors (divided as sectorBreaks describes) along
+ * one lap that starts at the start gate (point to point: one run from the start to the finish gate). Bearings follow
+ * the start gate's direction even when the route was ridden the other way. Like Android's
+ * TrackBuilder.suggestSectors.
+ */
+export function suggestSectors(route, doc, sectorCount) {
+  checkSectorCount(sectorCount);
+  const path=(route ?? []).filter(p => p && validPosition(p.lat, p.lon));
+  if (!validPosition(doc.startFinishLat,doc.startFinishLon)) throw Error('Place the start gate first.');
+  const circuit=doc.mode==='CIRCUIT';
+  if (!circuit && !validPosition(doc.finishLat,doc.finishLon)) throw Error('Place the finish gate first.');
+  const missing=circuit ? 'The recorded route needs one full lap through the start gate.'
+    : 'The recorded route needs one run from the start to the finish gate.';
+  const from=path.length<2 ? -1 : lapStart(path,{lat:doc.startFinishLat,lon:doc.startFinishLon},circuit);
+  if (from<0) throw Error(missing);
+  const to=circuit ? path.length-1 : nearestIndex(path,{lat:doc.finishLat,lon:doc.finishLon},from+1);
+  if (to<=from) throw Error(missing);
+  const lap=lapFrom(path,from,circuit,to);
+  if (circuit && !lap.closed) throw Error(missing);
+  const route2=along(lap.points);
+  if (route2.distance<MIN_TRACK_M) throw Error(missing);
+  const flip=angleBetween(route2.at(0).bearing, doc.startFinishBearingDeg ?? 0)>90;
+  const width=halfWidth(doc.gateHalfWidthM);
+  const first=doc.sectors?.find(s=>s.index===0);
+  const sectors=[{index:0, name:first?.name || 'S1', entryLat:doc.startFinishLat, entryLon:doc.startFinishLon,
+    bearingDeg:doc.startFinishBearingDeg, halfWidthM:width}];
+  for (const [n,meters] of sectorBreaks(route2,sectorCount,circuit).entries()) {
+    const i=n+1, p=route2.at(meters);
+    const bearing=flip ? (p.bearing+180)%360 : p.bearing;
+    sectors.push({index:i, name:'S'+(i+1), entryLat:p.lat, entryLon:p.lon, bearingDeg:Number(bearing.toFixed(1)), halfWidthM:width});
+  }
+  return sectors;
 }
 
 function validateDoc(doc) {
@@ -305,6 +453,17 @@ export function mountTrack(container, {doc:initial, onSave, route=[]} = {}) {
       selected='sector-'+index;placing=true;redrawEditor();
       say('Set the sector coordinates or place it on the map.');
     }));
+    if (route.length>=10) {
+      const count=textField(doc.sectors.length || 3,()=>{},{type:'number',min:1,max:100,step:1});
+      const countLabel=node('label',undefined,'tg-inline');countLabel.append(node('span','Sectors'),count);
+      gateTools.append(countLabel,btn('Suggest sectors',()=>{
+        try {
+          doc.sectors=suggestSectors(route,doc,count.valueAsNumber);
+          selected='start';placing=false;redrawEditor();
+          say(doc.sectors.length+' sectors along one lap, with lines on straights where possible. Check them on the map, then save.');
+        } catch(error) {say(error.message);}
+      }));
+    }
     if (selected.startsWith('sector-')) {
       const index=Number(selected.slice(7));
       const ordered=doc.sectors.filter(s=>s.index>0).sort((a,b)=>a.index-b.index);

@@ -16,3 +16,5 @@
 .tg-summary dt { font-weight: 650; overflow-wrap: anywhere; }
 .tg-summary dd { margin: 0; }
 .tg .tg-placing .leaflet-interactive { cursor: crosshair; }
+.tg .tg-inline { display: flex; align-items: center; gap: .45rem; font-weight: 650; }
+.tg .tg-inline input { width: 5.5rem; }
